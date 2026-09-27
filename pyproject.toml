@@ -72,6 +72,7 @@ extend-select = ["DTZ005"]
 quote-style = "double"
 
 [tool.mypy]
+exclude = ['\.venv/']
 python_version = "3.11"
 explicit_package_bases = true
 ignore_missing_imports = true
@@ -112,3 +113,7 @@ omit = [
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
+
+[[tool.mypy.overrides]]
+module = "deprecated.*"
+follow_imports = "skip"
