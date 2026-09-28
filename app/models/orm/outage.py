@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSON
+from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from app.db.base import Base
 
@@ -17,7 +17,11 @@ class OutageORM(Base):
     detected_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     description = Column(Text, nullable=False)
-    affected_services = Column(ARRAY(String), nullable=False, default=list)
+    # Postgres stores a native text[]; on SQLite (used by the self-contained
+    # test DBs) ARRAY cannot compile, so the variant falls back to JSON there.
+    affected_services = Column(
+        ARRAY(String).with_variant(JSON(), "sqlite"), nullable=False, default=list
+    )
     affected_subscribers = Column(Integer, nullable=True)
     assigned_to = Column(String(255), nullable=True)
     created_by = Column(String(255), nullable=True)

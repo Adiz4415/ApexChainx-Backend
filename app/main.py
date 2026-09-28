@@ -1,10 +1,12 @@
 import asyncio
+import time
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import ALL_METHODS, SAFELISTED_HEADERS, CORSMiddleware
@@ -194,9 +196,48 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 
 
 # Health checks
+# (#565) Cheap liveness probe: no DB, no Redis, no aggregation. Load-balancer
+# and orchestrator probes must never be able to trigger report aggregation or
+# hold DB-pool connections just to answer "is this process up?".
+@app.get("/health/live")
+def health_live():
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+
+
+# Backwards-compatible alias for the original liveness route.
 @app.get("/health/liveness")
 def liveness():
-    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+    return health_live()
+
+
+# (#565) Readiness probe: a trivial DB ping (SELECT 1) and nothing else. The
+# DB-heavy component checks (pool saturation, Redis, DLQ depth, audit DB) stay
+# in /health/readiness, which operators still use for the full report.
+@app.get("/health/ready")
+async def health_ready():
+    start = time.monotonic()
+    try:
+        await asyncio.to_thread(_ready_db_ping)
+        return {
+            "status": "ok",
+            "database": {"status": "ok", "latency_ms": round((time.monotonic() - start) * 1000, 2)},
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "down",
+                "database": {"status": "down", "error": str(exc)},
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
+
+
+def _ready_db_ping() -> None:
+    """Trivial DB ping for /health/ready; raises on failure."""
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
 
 
 @app.get("/health/readiness")
@@ -231,7 +272,6 @@ def health_check():
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, general_exception_handler)
-
 
 
 # API routes

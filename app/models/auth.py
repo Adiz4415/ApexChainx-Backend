@@ -43,13 +43,14 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(LoginRequest):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "email": "user@example.com",
                 "password": "Password123!",
                 "full_name": "Example User",
             }
-        }
+        },
     )
 
     full_name: str = Field(..., min_length=1)

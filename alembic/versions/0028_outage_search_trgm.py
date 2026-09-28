@@ -10,6 +10,7 @@ Revision ID: 0028_outage_search_trgm
 Revises: 0027_sla_results_restrict_cascade
 Create Date: 2026-08-26
 """
+
 from alembic import op
 
 revision = "0028_outage_search_trgm"

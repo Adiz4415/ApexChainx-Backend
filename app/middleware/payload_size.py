@@ -38,6 +38,13 @@ class PayloadSizeMiddleware:
     def __init__(self, app):
         self.app = app
 
+    def __getattr__(self, name):
+        # The module-level `app` in app.main is rebound to this wrapper, so
+        # attribute access meant for the FastAPI instance (e.g.
+        # app.dependency_overrides in tests, app.routes in tooling) must
+        # delegate to the wrapped application.
+        return getattr(self.app, name)
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)

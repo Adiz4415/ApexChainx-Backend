@@ -4,8 +4,14 @@ from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, TypeDecorator
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy import JSON
+from sqlalchemy import UUID as GenericUUID
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
+
+# Postgres-native types degrade to generic equivalents on SQLite so the
+# self-contained test DBs (create_all against sqlite:///:memory:) can compile
+# the same ORM metadata.
 
 from app.db.base_class import Base
 from app.services.secret_encryption import decrypt_secret, encrypt_secret
@@ -34,6 +40,13 @@ class EncryptedSecret(TypeDecorator):
         return decrypt_secret(value)
 
 
+# Postgres-native types degrade to generic equivalents on SQLite so the
+# self-contained test DBs (create_all against sqlite:///:memory:) can compile
+# the same ORM metadata.
+UUIDVariant = UUID(as_uuid=True).with_variant(GenericUUID(), "sqlite")
+JSONBVariant = JSONB().with_variant(JSON(), "sqlite")
+
+
 class WebhookEvent(str, enum.Enum):
     SLA_VIOLATION = "sla.violation"
     SLA_WARNING = "sla.warning"
@@ -52,7 +65,7 @@ class WebhookDeliveryStatus(str, enum.Enum):
 class Webhook(Base):
     __tablename__ = "webhooks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUIDVariant, primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     url = Column(String(2048), nullable=False)
     # Encrypted at rest (#266); never contains the raw signing secret.
@@ -68,7 +81,7 @@ class Webhook(Base):
     last_secret_rotation_at = Column(DateTime, nullable=True)  # When the secret was last rotated
     secret_version = Column(Integer, default=1, nullable=False)  # Incremented on each rotation
     # BE-009: Grace period overlap window
-    previous_secrets = Column(JSONB, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
+    previous_secrets = Column(JSONBVariant, default=list, nullable=False)  # List of {hashed_secret, created_at, expires_at}
     secret_grace_hours = Column(Integer, default=24, nullable=False)  # Configurable grace period per webhook
 
     # #518: soft delete. Deleting a webhook used to delete the row, and
@@ -87,11 +100,15 @@ class Webhook(Base):
 class WebhookDelivery(Base):
     __tablename__ = "webhook_deliveries"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    webhook_id = Column(UUID(as_uuid=True), ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False)
-    event = Column(SAEnum(WebhookEvent), nullable=False)
+    id = Column(UUIDVariant, primary_key=True, default=uuid.uuid4)
+    webhook_id = Column(UUIDVariant, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False)
+    event = Column(SAEnum(WebhookEvent, values_callable=lambda x: [e.value for e in x]), nullable=False)
     payload = Column(Text, nullable=False)  # JSON-encoded payload
-    status = Column(SAEnum(WebhookDeliveryStatus), default=WebhookDeliveryStatus.PENDING, nullable=False)
+    status = Column(
+        SAEnum(WebhookDeliveryStatus, values_callable=lambda x: [e.value for e in x]),
+        default=WebhookDeliveryStatus.PENDING,
+        nullable=False,
+    )
     attempt_count = Column(Integer, default=0, nullable=False)
     next_retry_at = Column(DateTime, nullable=True)
     response_status_code = Column(Integer, nullable=True)

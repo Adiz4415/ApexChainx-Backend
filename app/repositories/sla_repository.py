@@ -12,6 +12,7 @@ from app.models.orm.outage import OutageORM
 from app.models.orm.sla import SLAResultORM
 from app.models.orm.sla_snapshot import SLAAnalyticsSnapshotORM
 from app.models.sla import SLAAnalyticsSnapshot, SLADashboardKPI, SLAPerformanceAggregation, SLAResult, SLATrendPoint
+from app.services.sla.config import max_policy_version
 
 BucketInterval = Literal["day", "week", "month"]
 VALID_BUCKETS: tuple[str, ...] = ("day", "week", "month")
@@ -231,10 +232,10 @@ class SLARepository:
                 func.sum(case((SLAResultORM.payment_type == "penalty", func.abs(SLAResultORM.amount)), else_=0.0)),
                 0.0,
             ).label("total_penalties"),
-        # (#276) Only count each outage's current result. Without this filter,
-        # every historical recompute (is_latest=False) is double-counted here
-        # while aggregate_performance already dedupes via row_number, so the
-        # two dashboard endpoints disagreed on total_outages for the same data.
+            # (#276) Only count each outage's current result. Without this filter,
+            # every historical recompute (is_latest=False) is double-counted here
+            # while aggregate_performance already dedupes via row_number, so the
+            # two dashboard endpoints disagreed on total_outages for the same data.
         ).where(
             SLAResultORM.is_latest.is_(True),
             SLAResultORM.created_at >= scan_start,
@@ -331,6 +332,22 @@ class SLARepository:
             for row in rows
         ][::-1]
 
+    def _snapshot_to_pydantic(self, orm: SLAAnalyticsSnapshotORM) -> SLAAnalyticsSnapshot:
+        """Map a snapshot ORM row to the API schema (#567: includes policy_version)."""
+        return SLAAnalyticsSnapshot(
+            id=orm.id,
+            snapshot_key=orm.snapshot_key,
+            total_outages=orm.total_outages,
+            total_violations=orm.total_violations,
+            total_rewards=orm.total_rewards,
+            total_penalties=orm.total_penalties,
+            net_payout=orm.net_payout,
+            avg_mttr=orm.avg_mttr,
+            policy_version=orm.policy_version,
+            checksum=orm.checksum,
+            created_at=str(orm.created_at),
+        )
+
     def create_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot:
         """Materialize current dashboard KPIs into a snapshot row."""
         kpis = self.aggregate_dashboard_kpis()
@@ -343,6 +360,8 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
+            # (#567) Record the policy version that produced these aggregates.
+            policy_version=max_policy_version(self.db),
             created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",  # Temporary value, will be computed
         )
@@ -350,18 +369,7 @@ class SLARepository:
         self.db.add(orm)
         self.db.commit()
         self.db.refresh(orm)
-        return SLAAnalyticsSnapshot(
-            id=orm.id,
-            snapshot_key=orm.snapshot_key,
-            total_outages=orm.total_outages,
-            total_violations=orm.total_violations,
-            total_rewards=orm.total_rewards,
-            total_penalties=orm.total_penalties,
-            net_payout=orm.net_payout,
-            avg_mttr=orm.avg_mttr,
-            checksum=orm.checksum,
-            created_at=str(orm.created_at),
-        )
+        return self._snapshot_to_pydantic(orm)
 
     def get_latest_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot | None:
         """Return the most recent snapshot for the given key."""
@@ -373,18 +381,7 @@ class SLARepository:
         )
         if not orm:
             return None
-        return SLAAnalyticsSnapshot(
-            id=orm.id,
-            snapshot_key=orm.snapshot_key,
-            total_outages=orm.total_outages,
-            total_violations=orm.total_violations,
-            total_rewards=orm.total_rewards,
-            total_penalties=orm.total_penalties,
-            net_payout=orm.net_payout,
-            avg_mttr=orm.avg_mttr,
-            checksum=orm.checksum,
-            created_at=str(orm.created_at),
-        )
+        return self._snapshot_to_pydantic(orm)
 
     def rebuild_snapshot(self, snapshot_key: str = "global") -> SLAAnalyticsSnapshot:
         """Rebuild a snapshot from current live data. Idempotent operation.
@@ -409,6 +406,8 @@ class SLARepository:
             total_penalties=kpis.total_penalties,
             net_payout=kpis.net_payout,
             avg_mttr=perf.avg_mttr,
+            # (#567) Record the policy version that produced these aggregates.
+            policy_version=max_policy_version(self.db),
             created_at=datetime.now(UTC).replace(tzinfo=None),
             checksum="",
         )
@@ -417,18 +416,7 @@ class SLARepository:
         self.db.commit()
         self.db.refresh(orm)
 
-        return SLAAnalyticsSnapshot(
-            id=orm.id,
-            snapshot_key=orm.snapshot_key,
-            total_outages=orm.total_outages,
-            total_violations=orm.total_violations,
-            total_rewards=orm.total_rewards,
-            total_penalties=orm.total_penalties,
-            net_payout=orm.net_payout,
-            avg_mttr=orm.avg_mttr,
-            checksum=orm.checksum,
-            created_at=str(orm.created_at),
-        )
+        return self._snapshot_to_pydantic(orm)
 
     def verify_snapshot_integrity(self, snapshot_key: str = "global") -> dict:
         """Verify integrity of the latest snapshot.

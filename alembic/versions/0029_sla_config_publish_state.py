@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Persist SLA policy versions and publish tokens.
 
 The sla_config_history table (0022) already enforces a unique
@@ -8,6 +9,7 @@ tokens survive process restarts and are shared across workers (#272).
 Revision ID: 0029_sla_config_publish_state
 Revises: 0028_outage_search_trgm
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa

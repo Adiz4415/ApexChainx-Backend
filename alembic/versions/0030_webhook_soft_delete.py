@@ -26,7 +26,6 @@ def upgrade() -> None:
     op.add_column(
         "webhooks",
         sa.Column("deleted_at", sa.DateTime(), nullable=True),
-        if_not_exists=True,
     )
     # Every existing row predates soft delete, so none of them is a tombstone.
     # The index keeps the "not deleted" filter on the list endpoint off a

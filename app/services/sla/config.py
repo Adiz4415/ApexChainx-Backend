@@ -6,6 +6,7 @@ import secrets
 from copy import deepcopy
 from datetime import UTC, datetime
 
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -99,6 +100,25 @@ def get_policy_version(severity: str, db: Session | None = None) -> int:
     return _policy_versions[normalized]
 
 
+def max_policy_version(db: Session | None = None) -> int:
+    """Return the highest policy version across all severities (#567).
+
+    Used as the version component of aggregate cache keys and snapshot
+    metadata: any publish bumps at least one severity, so the returned
+    value changes whenever policy content changes.
+
+    When a DB session is provided the persisted history is authoritative
+    (survives restarts and multi-worker divergence, #272); otherwise the
+    in-process cache is used.  Falls back to the in-process cache when the
+    history table has no rows yet (fresh deployment).
+    """
+    if db is not None:
+        latest = db.execute(select(func.max(SLAConfigHistoryORM.policy_version))).scalar()
+        if latest is not None:
+            return int(latest)
+    return max(_policy_versions[sev] for sev in SLA_CONFIG)
+
+
 def get_current_token(severity: str, db: Session | None = None) -> str:
     """Return the current publish token (used for optimistic concurrency).
 
@@ -158,7 +178,9 @@ def get_config_with_hash(severity: str) -> SLAPolicyContent:
     )
 
 
-def update_config_for_severity(severity: str, payload: SLAConfigUpdateRequest, db: Session | None = None) -> SLASeverityConfig:
+def update_config_for_severity(
+    severity: str, payload: SLAConfigUpdateRequest, db: Session | None = None
+) -> SLASeverityConfig:
     """Update config for a severity without an expected token (#273).
 
     Delegates to publish_config_for_severity with no token check, so a
@@ -251,8 +273,7 @@ def publish_config_for_severity(
         except IntegrityError as exc:
             db.rollback()
             raise ConcurrencyError(
-                f"Config for '{severity}' was modified by another request. "
-                "Re-fetch the current config and retry."
+                f"Config for '{severity}' was modified by another request. " "Re-fetch the current config and retry."
             ) from exc
 
     # Commit succeeded (or no DB) — refresh the in-process cache so the

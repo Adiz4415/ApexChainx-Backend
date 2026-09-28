@@ -4,9 +4,21 @@ from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, Text
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy import UUID as GenericUUID
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
+# Postgres-native types degrade to generic equivalents on SQLite so the
+# self-contained test DBs (create_all against sqlite:///:memory:) can compile
+# the same ORM metadata.
+
 from app.db.base_class import Base
+
+
+# Postgres-native types degrade to generic equivalents on SQLite so the
+# self-contained test DBs (create_all against sqlite:///:memory:) can compile
+# the same ORM metadata.
+UUIDVariant = UUID(as_uuid=True).with_variant(GenericUUID(), "sqlite")
+JSONBVariant = JSONB().with_variant(JSON(), "sqlite")
 
 
 class JobStatus(str, enum.Enum):
@@ -26,12 +38,16 @@ class JobType(str, enum.Enum):
 class Job(Base):
     __tablename__ = "jobs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(UUIDVariant, primary_key=True, default=uuid.uuid4)
     celery_task_id = Column(String(255), unique=True, nullable=False, index=True)
-    job_type = Column(SAEnum(JobType), nullable=False)
-    status = Column(SAEnum(JobStatus), default=JobStatus.PENDING, nullable=False)
-    payload = Column(JSONB, nullable=True)  # JSON input params
-    result = Column(JSONB, nullable=True)  # JSON result
+    job_type = Column(SAEnum(JobType, values_callable=lambda x: [e.value for e in x]), nullable=False)
+    status = Column(
+        SAEnum(JobStatus, values_callable=lambda x: [e.value for e in x]),
+        default=JobStatus.PENDING,
+        nullable=False,
+    )
+    payload = Column(JSONBVariant, nullable=True)  # JSON input params
+    result = Column(JSONBVariant, nullable=True)  # JSON result
     error = Column(Text, nullable=True)
     progress = Column(Float, default=0.0)  # 0.0 – 100.0
     progress_details = Column(JSON, nullable=True)  # Structured progress information

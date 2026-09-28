@@ -76,7 +76,9 @@ class AuthStore:
         return user_orm_to_pydantic(orm_user)
 
     @classmethod
-    def admin_create_user(cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session) -> AuthUser:
+    def admin_create_user(
+        cls, email: str, password: str, full_name: str, role: Role, actor_id: str, actor_email: str, db: Session
+    ) -> AuthUser:
         """Admin-only user creation with audit logging of the approving admin."""
         user_repo = UserRepository(db)
         if user_repo.get_by_email(email):
@@ -84,8 +86,7 @@ class AuthStore:
 
         if not validate_password_policy(password):
             raise ValueError(
-                "Password does not meet policy requirements (min 8 chars, "
-                "uppercase, lowercase, digit, special char)"
+                "Password does not meet policy requirements (min 8 chars, " "uppercase, lowercase, digit, special char)"
             )
 
         hashed_password = get_password_hash(password)
@@ -139,7 +140,7 @@ class AuthStore:
                     db,
                     "account_locked",
                     email=payload.email,
-                    actor_id=stored_user.user_id,
+                    actor_id=stored_user.id,
                     details={
                         "lockout_duration_minutes": settings.AUTH_LOCKOUT_DURATION_MINUTES,
                         "failed_attempts": stored_user.failed_login_attempts,
@@ -153,7 +154,7 @@ class AuthStore:
                 db,
                 "login_failed",
                 email=payload.email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={"reason": "invalid_credentials"},
             )
             raise ValueError("Invalid credentials")
@@ -178,7 +179,7 @@ class AuthStore:
             expires_at=expires_at,
         )
 
-        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.user_id)
+        audit_log.log_event(db, "login_success", email=payload.email, actor_id=stored_user.id)
 
         return AuthSessionResponse(
             access_token=access_token,
@@ -275,7 +276,7 @@ class AuthStore:
                 db,
                 "refresh_failed_compromised",
                 email=email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={"family_id": family_id, "reason": "compromised_family"},
             )
             raise ValueError("Session family has been compromised")
@@ -289,7 +290,7 @@ class AuthStore:
                 db,
                 "refresh_token_reuse",
                 email=email,
-                actor_id=stored_user.user_id if stored_user else None,
+                actor_id=stored_user.id if stored_user else None,
                 details={
                     "family_id": family_id,
                     "sequence": old_session.sequence,
@@ -323,7 +324,7 @@ class AuthStore:
             db,
             "refresh",
             email=email,
-            actor_id=stored_user.user_id,
+            actor_id=stored_user.id,
             details={"family_id": family_id, "event": "token_rotation"},
         )
 

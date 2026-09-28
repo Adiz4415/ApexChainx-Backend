@@ -7,6 +7,35 @@ VALID_CONTRACT_EXECUTION_MODES = {"local_adapter", "soroban_rpc"}
 DEFAULT_SECRET_KEY = "apexchainx-dev-secret"
 MIN_SECRET_KEY_LENGTH = 32
 
+# Header clients use to pin an API version (#499)
+API_VERSION_HEADER = "X-API-Version"
+
+
+def parse_api_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a dotted API version into a 3-part comparable tuple.
+
+    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
+    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
+    ``None`` when the value is not a dotted numeric version.
+    """
+    raw = value.strip().removeprefix("v").strip()
+    if not raw:
+        return None
+    parts = raw.split(".")
+    if len(parts) > 3:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        # isdecimal (not isdigit) so superscripts such as "²" are rejected
+        # instead of blowing up int() on an attacker-controlled header.
+        if not part.isdecimal():
+            return None
+        numbers.append(int(part))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
+
 # #510: environments in which Celery eager mode is allowed. Everywhere else a
 # CELERY_TASK_ALWAYS_EAGER=true default silently runs every task in-process
 # while presenting a queue topology that does nothing.
@@ -118,7 +147,17 @@ class Settings(BaseSettings):
     MAX_WEBHOOK_NAME_LENGTH: int = 255  # Max webhook name length
     MAX_WEBHOOK_URL_LENGTH: int = 2048  # Max webhook URL length
     MAX_WEBHOOK_MAX_RETRIES: int = 10  # Max delivery retry attempts a webhook may be configured for (#552)
-    
+    # Per-account registration cap (#551). 0 disables the check. Reaching it
+    # returns 409 on webhook creation.
+    MAX_WEBHOOKS_PER_ACCOUNT: int = 50
+    # Total event subscriptions across webhooks that triggers a fan-out warning
+    # (not a hard limit). 0 disables the warning.
+    WEBHOOK_FANOUT_WARN_THRESHOLD: int = 100
+    # Governance contract operations are disabled by default: the local_adapter
+    # path fabricates deterministic stub hashes, so exposing them by default
+    # would misreport simulated transfers as on-chain completions.
+    GOVERNANCE_ENABLED: bool = False
+
     # Webhook URL validation and SSRF protection
     WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
     WEBHOOK_URL_ALLOWLIST: list[str] = []
@@ -210,9 +249,7 @@ def validate_critical_settings(config: Settings) -> None:
         errors.append("VERSION must be a dotted numeric version such as 1.0.0.")
     if None not in (min_version, max_version) and min_version > max_version:
         errors.append("API_VERSION_MIN_SUPPORTED must not be greater than API_VERSION_MAX_SUPPORTED.")
-    if None not in (min_version, max_version, current_version) and not (
-        min_version <= current_version <= max_version
-    ):
+    if None not in (min_version, max_version, current_version) and not (min_version <= current_version <= max_version):
         errors.append("VERSION must fall within [API_VERSION_MIN_SUPPORTED, API_VERSION_MAX_SUPPORTED].")
 
     if not config.API_V1_PREFIX.startswith("/"):
@@ -276,7 +313,11 @@ def validate_critical_settings(config: Settings) -> None:
         errors.append("TRUSTED_PROXY_COUNT must be >= 0.")
 
     if config.ENVIRONMENT not in {"local", "test"}:
-        if not config.SECRET_KEY or config.SECRET_KEY == DEFAULT_SECRET_KEY or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH:
+        if (
+            not config.SECRET_KEY
+            or config.SECRET_KEY == DEFAULT_SECRET_KEY
+            or len(config.SECRET_KEY) < MIN_SECRET_KEY_LENGTH
+        ):
             errors.append(
                 f"SECRET_KEY must be set to a secure, non-default value in non-local environments. "
                 f"Current value is the development default or too short (< {MIN_SECRET_KEY_LENGTH} chars). "
@@ -291,15 +332,11 @@ def validate_critical_settings(config: Settings) -> None:
             )
 
         if not config.PAYMENT_WEBHOOK_SECRET:
-            errors.append(
-                f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
-            )
+            errors.append(f"PAYMENT_WEBHOOK_SECRET must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
 
         encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
         if not encryption_key:
-            errors.append(
-                f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}."
-            )
+            errors.append(f"WEBHOOK_SECRET_ENCRYPTION_KEY must not be empty in ENVIRONMENT={config.ENVIRONMENT!r}.")
 
     encryption_key = getattr(config, "WEBHOOK_SECRET_ENCRYPTION_KEY", "") or ""
     if encryption_key:
@@ -309,8 +346,7 @@ def validate_critical_settings(config: Settings) -> None:
             Fernet(encryption_key.encode("utf-8"))
         except Exception:
             errors.append(
-                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key "
-                "(32 url-safe base64-encoded bytes)."
+                "WEBHOOK_SECRET_ENCRYPTION_KEY must be a valid Fernet key " "(32 url-safe base64-encoded bytes)."
             )
 
     try:

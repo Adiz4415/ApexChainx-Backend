@@ -11,6 +11,7 @@ from app.core.security import require_admin
 from app.services.audit_log import audit_log
 from app.services.contracts.governance_client import (
     GovernanceError,
+    GovernanceNotImplementedError,
     accept_admin,
     accept_operator,
     cancel_admin_proposal,
@@ -20,6 +21,21 @@ from app.services.contracts.governance_client import (
 )
 
 router = APIRouter()
+
+
+def _raise_governance_failure(exc: GovernanceError) -> None:
+    """Map client errors to HTTP semantics.
+
+    A disabled/unimplemented operation is a 501 (the capability does not
+    exist, so 400 would imply the request was at fault); any other governance
+    failure is a 400.
+    """
+    if isinstance(exc, GovernanceNotImplementedError):
+        raise HTTPException(
+            status_code=501,
+            detail={"error": "not_implemented", "detail": str(exc)},
+        ) from exc
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ProposeAdminRequest(BaseModel):
@@ -39,7 +55,7 @@ def api_propose_admin(
     try:
         result = propose_admin(payload.new_admin_address)
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_propose_admin",
@@ -60,7 +76,7 @@ def api_accept_admin(
     try:
         result = accept_admin()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_accept_admin",
@@ -80,7 +96,7 @@ def api_cancel_admin_proposal(
     try:
         result = cancel_admin_proposal()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_cancel_admin_proposal",
@@ -100,7 +116,7 @@ def api_renounce_admin(
     try:
         result = renounce_admin()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_renounce_admin",
@@ -121,7 +137,7 @@ def api_propose_operator(
     try:
         result = propose_operator(payload.new_operator_address)
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_propose_operator",
@@ -142,7 +158,7 @@ def api_accept_operator(
     try:
         result = accept_operator()
     except GovernanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_governance_failure(exc)
 
     audit_log.log(
         event_type="governance_accept_operator",
