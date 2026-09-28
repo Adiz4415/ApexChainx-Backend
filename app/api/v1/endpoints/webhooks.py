@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -17,6 +18,7 @@ from app.services.audit_log import audit_log
 from app.services.formatters import canonical_json
 from app.services.metrics import increment_counter, set_gauge
 from app.services.webhook_service import WEBHOOK_SCHEMA_VERSION
+from app.services.webhook_uniqueness import DuplicateWebhookError, handle_create_integrity_error
 from app.utils.logging import get_structured_logger
 from app.utils.network_validation import validate_webhook_url
 from app.utils.secret_history import prune_expired_secrets
@@ -384,7 +386,24 @@ def create_webhook(payload: WebhookCreate, current_user=Depends(require_admin), 
         resolved_ips=canonical_json(resolved_ips),
     )
     db.add(webhook)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        # The partial unique index on (url, events) WHERE deleted_at IS NULL
+        # fires when the same url+events tuple is registered twice without an
+        # intervening soft-delete.  Translate to 409 so the caller gets a
+        # machine-readable signal instead of an unhandled 500 (issue #562).
+        try:
+            handle_create_integrity_error(exc)
+        except DuplicateWebhookError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A webhook with this url and events combination already exists.",
+            ) from exc
+        # Any other IntegrityError (e.g. FK violation) is not a duplicate —
+        # re-raise and let the global handler deal with it.
+        raise
     db.refresh(webhook)
     _warn_on_excessive_fanout(db)
     return _serialize_webhook(webhook)
