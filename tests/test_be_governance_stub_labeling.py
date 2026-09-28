@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import patch
 from app.services.contracts.governance_client import (
     propose_admin,
     accept_admin,
@@ -8,11 +7,37 @@ from app.services.contracts.governance_client import (
 )
 
 
-@pytest.mark.parametrize("fn,args", [
-    (propose_admin, ("GADDRESS123",)),
-    (accept_admin, ("GADDRESS123",)),
-    (renounce_admin, ("GADDRESS123",)),
-])
+@pytest.fixture
+def admin_headers():
+    """Bypass auth — override require_admin with a fake admin (same as the
+    admin endpoint test suite). The endpoint must then surface disabled
+    governance as 501 rather than a fabricated success payload."""
+    from datetime import UTC, datetime
+
+    from app.core.security import require_admin
+    from app.main import app
+    from app.models.auth import AuthUser, Role
+
+    fake_admin = AuthUser(
+        id="admin_test",
+        email="admin_test@example.com",
+        full_name="Test Admin",
+        role=Role.admin,
+        created_at=datetime.now(UTC),
+    )
+    app.dependency_overrides[require_admin] = lambda: fake_admin
+    yield {"X-Test-Admin": "1"}
+    app.dependency_overrides.pop(require_admin, None)
+
+
+@pytest.mark.parametrize(
+    "fn,args",
+    [
+        (propose_admin, ("GADDRESS123",)),
+        (accept_admin, ()),
+        (renounce_admin, ()),
+    ],
+)
 def test_governance_ops_raise_when_disabled(settings, fn, args):
     """With GOVERNANCE_ENABLED off (the default), every governance op
     must fail loudly rather than fabricate a success response."""
@@ -31,8 +56,14 @@ def test_simulated_response_is_explicitly_labeled(settings):
     assert "status" in result
 
 
-def test_admin_endpoint_returns_501_when_not_implemented(client, settings):
+def test_admin_endpoint_returns_501_when_not_implemented(client, settings, admin_headers):
+    """Disabled governance surfaces as 501, not a fabricated success."""
     settings.GOVERNANCE_ENABLED = False
-    response = client.post("/api/v1/admin/propose", json={"new_admin_address": "GADDRESS123"})
+    response = client.post(
+        "/api/v1/admin/propose-admin",
+        json={"new_admin_address": "GADDRESS123"},
+        headers=admin_headers,
+    )
     assert response.status_code == 501
-    assert response.json()["detail"]["error"] == "not_implemented"
+    body = response.json()
+    assert body["errors"][0]["error"] == "not_implemented"

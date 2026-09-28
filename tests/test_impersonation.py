@@ -1,37 +1,47 @@
 """Tests for admin user impersonation endpoint."""
 
 import pytest
-from fastapi.testclient import TestClient
 
+from app.core.security import get_password_hash
 from app.db.session import SessionLocal
-from app.main import app
 from app.models.auth import LoginRequest, RegisterRequest
+from app.models.enums import Role
 from app.models.orm.user import UserORM
+from app.repositories.user_repository import UserRepository
 from app.services.auth_store import AuthStore
 
 
-@pytest.fixture
-def client():
-    with TestClient(app) as test_client:
-        yield test_client
+def _seed_user(email: str, password: str, full_name: str, role: Role) -> None:
+    """Create a user with an explicit role directly in the DB.
+
+    Public registration always creates engineers (role self-assignment was
+    removed), so tests needing a privileged user must seed one the same way
+    the admin-only creation endpoint does.
+    """
+    db = SessionLocal()
+    try:
+        repo = UserRepository(db)
+        if not repo.get_by_email(email):
+            repo.create(
+                user_id=f"user_{email.split('@')[0]}"[:60],
+                email=email,
+                hashed_password=get_password_hash(password),
+                full_name=full_name,
+                role=role,
+            )
+    finally:
+        db.rollback()
+        db.close()
 
 
 @pytest.fixture
 def admin_headers(client):
-    """Register an admin user and return auth headers with a valid token."""
+    """Seed an admin user and return auth headers with a valid token."""
     db = SessionLocal()
     try:
         email = f"imp-admin-{id(object())}@example.com"
         password = "Admin123!"
-        AuthStore.register(
-            RegisterRequest(
-                email=email,
-                password=password,
-                full_name="Admin User",
-                role="admin",
-            ),
-            db=db,
-        )
+        _seed_user(email, password, "Admin User", Role.admin)
         session = AuthStore.login(LoginRequest(email=email, password=password), db=db)
         yield {
             "Authorization": f"Bearer {session.access_token}",
@@ -55,7 +65,6 @@ def regular_user_headers(client):
                 email=email,
                 password=password,
                 full_name="Regular User",
-                role="engineer",
             ),
             db=db,
         )
@@ -108,19 +117,11 @@ class TestImpersonation:
         assert me_data["id"] == regular_user_headers["user_id"]
 
     def test_cannot_impersonate_another_admin(self, client, admin_headers):
-        # Register a second admin
+        # Seed a second admin directly (public registration cannot create admins)
         db = SessionLocal()
         try:
             admin2_email = f"imp-admin2-{id(object())}@example.com"
-            AuthStore.register(
-                RegisterRequest(
-                    email=admin2_email,
-                    password="Admin123!",
-                    full_name="Admin Two",
-                    role="admin",
-                ),
-                db=db,
-            )
+            _seed_user(admin2_email, "Admin123!", "Admin Two", Role.admin)
             admin2 = db.query(UserORM).filter(UserORM.email == admin2_email).first()
             admin2_id = admin2.id if admin2 else "unknown"
         finally:

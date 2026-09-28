@@ -15,6 +15,7 @@ total is taken from the same statement as the page rather than a second COUNT.
 
 import json
 from types import SimpleNamespace
+from collections import namedtuple
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ def _webhook(name: str = "outage-webhook", is_active: bool = True):
         max_retries=3,
         secret_version=1,
         last_secret_rotation_at=None,
+        deleted_at=None,  # soft-delete tombstone (#518), also drives is_deleted
     )
 
 
@@ -59,8 +61,14 @@ def _mock_db(rows, total: int):
 
 
 def _paged_rows(items, total: int):
-    """Rows as `add_columns(func.count().over())` returns them."""
-    return [(item, total) for item in items]
+    """Rows as `add_columns(func.count().over())` returns them.
+
+    SQLAlchemy rows support both positional and attribute access, which the
+    endpoint uses interchangeably (`row[0]` for the webhook,
+    `row.total_count` for the window count), so the stand-in must too.
+    """
+    row = namedtuple("PagedWebhookRow", ["webhook", "total_count"])
+    return [row(item, total) for item in items]
 
 
 def _override(mock_db):
@@ -180,7 +188,11 @@ class TestQuery:
 
         client.get("/api/v1/webhooks")
 
-        assert query.order_by.call_args[0] == (Webhook.created_at.desc(), Webhook.id)
+        # .desc() returns a fresh expression per call, so compare the rendered
+        # SQL instead of object identity/equality.
+        order_args = query.order_by.call_args[0]
+        assert str(order_args[0]) == str(Webhook.created_at.desc())
+        assert order_args[1] is Webhook.id
 
     def test_total_comes_from_the_page_statement(self, admin_override):
         """The #296 single-statement pattern: no second COUNT(*) per request."""
@@ -205,18 +217,21 @@ class TestQuery:
 
         client.get("/api/v1/webhooks?is_active=false")
 
-        query.filter.assert_called_once()
+        # filter() is also used by the default deleted_at tombstone filter.
+        assert query.filter.call_count == 2
 
     def test_name_filter_is_applied(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?name=outage")
 
-        query.filter.assert_called_once()
+        # filter() is also used by the default deleted_at tombstone filter.
+        assert query.filter.call_count == 2
 
     def test_both_filters_combine(self, admin_override):
         query = _install([], 0)
 
         client.get("/api/v1/webhooks?is_active=true&name=outage")
 
-        assert query.filter.call_count == 2
+        # deleted_at (soft-delete #518) + is_active + name.
+        assert query.filter.call_count == 3

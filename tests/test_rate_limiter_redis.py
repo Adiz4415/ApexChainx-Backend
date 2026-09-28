@@ -1,7 +1,5 @@
-import asyncio
-
 import pytest
-from fakeredis.aioredis import FakeRedis
+from fakeredis import FakeStrictRedis
 from redis.exceptions import RedisError
 
 from app.core.config import settings
@@ -17,12 +15,15 @@ def reset_rate_limiter_settings(monkeypatch):
 
 @pytest.fixture
 def fake_redis():
-    client = FakeRedis()
+    # Sync fake: RedisRateLimiter._eval calls the *sync* client.eval, and an
+    # async fake would return an unawaited coroutine there (bool(coroutine) is
+    # always True, silently disabling the limiter under test).
+    client = FakeStrictRedis()
     try:
         yield client
     finally:
-        asyncio.run(client.flushall())
-        asyncio.run(client.close())
+        client.flushall()
+        client.close()
 
 
 def test_redis_rate_limiter_allows_up_to_limit_and_rejects_11th(fake_redis):
@@ -53,7 +54,9 @@ def test_redis_rate_limiter_falls_back_gracefully_when_redis_unreachable(monkeyp
     limiter = RedisRateLimiter()
     limiter.client = fake_redis
 
-    async def fail_eval(*args, **kwargs):
+    # Sync stub: _eval calls the sync client.eval, so the stub must raise the
+    # error synchronously for the circuit breaker to observe it.
+    def fail_eval(*args, **kwargs):
         raise RedisError("network failure")
 
     monkeypatch.setattr(limiter.client, "eval", fail_eval)

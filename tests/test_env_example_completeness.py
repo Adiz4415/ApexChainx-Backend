@@ -53,9 +53,16 @@ def _example_keys() -> set[str]:
 
 
 def _coerce(raw: str):
-    """Env files carry strings; pydantic-settings parses lists as JSON."""
+    """Env files carry strings; pydantic-settings parses lists as JSON.
+
+    A value like [GENERATE_SECURE_RANDOM_STRING] starts with '[' but is a
+    placeholder, not a JSON list — keep it as the literal string.
+    """
     if raw.startswith("["):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
     return raw
 
 
@@ -93,7 +100,9 @@ class TestTemplateCoverage:
         """The required-secret section must not ship a literal value."""
         text = _example_text()
         for key in ("SECRET_KEY", "PAYMENT_WEBHOOK_SECRET"):
-            assigned = [line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key]
+            assigned = [
+                line for line in text.splitlines() if ASSIGNMENT.match(line) and line.partition("=")[0].strip() == key
+            ]
             assert assigned, f"{key} should be present in the template"
             for line in assigned:
                 assert "GENERATE" in line, f"{key} must stay a documented placeholder, got: {line}"
@@ -158,6 +167,8 @@ class TestProductionGuards:
             IMPERSONATION_SIGNING_KEY="i" * 48,
             PAYMENT_WEBHOOK_SECRET="w" * 48,
             WEBHOOK_SECRET_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+            # The dev template runs Celery eager; production must not (#510).
+            CELERY_TASK_ALWAYS_EAGER=False,
         )
 
         validate_critical_settings(config)

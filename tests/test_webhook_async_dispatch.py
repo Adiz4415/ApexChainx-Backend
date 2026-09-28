@@ -3,6 +3,16 @@ from unittest.mock import MagicMock, patch
 from app.models.webhook import WebhookDeliveryStatus
 
 
+def _active_webhooks_query_result(mock_db, webhooks):
+    """Stub the two-filter chain used by get_active_webhooks_for_event.
+
+    The #518 tombstone filter means the service calls
+    `db.query(Webhook).filter(...).filter(...).all()`; each `.filter()` returns
+    a new query object, so both links must resolve to the row list.
+    """
+    mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = webhooks
+
+
 def _make_delivery(status=WebhookDeliveryStatus.PENDING, attempt_count=0):
     delivery = MagicMock()
     delivery.id = "11111111-1111-1111-1111-111111111111"
@@ -46,11 +56,14 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        _active_webhooks_query_result(mock_db, [_make_webhook()])
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=False),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=False),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -62,11 +75,14 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        _active_webhooks_query_result(mock_db, [_make_webhook()])
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=True),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=True),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -78,11 +94,14 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = [_make_webhook()]
+        _active_webhooks_query_result(mock_db, [_make_webhook()])
         delivery = _make_delivery()
-        with patch("app.services.webhook_service.create_delivery", return_value=delivery), patch(
-            "app.tasks.celery_app.celery_app",
-            side_effect=ImportError("no celery"),
+        with (
+            patch("app.services.webhook_service.create_delivery", return_value=delivery),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                side_effect=ImportError("no celery"),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 
@@ -93,7 +112,7 @@ class TestTriggerSlaViolationAsyncDispatch:
         from app.services.webhook_service import trigger_sla_violation_webhooks
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.all.return_value = []
+        _active_webhooks_query_result(mock_db, [])
         result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
         assert result == []
 
@@ -103,15 +122,18 @@ class TestTriggerSlaViolationAsyncDispatch:
 
         mock_db = MagicMock()
         hooks = [_make_webhook(), _make_webhook()]
-        mock_db.query.return_value.filter.return_value.all.return_value = hooks
+        _active_webhooks_query_result(mock_db, hooks)
         d1 = _make_delivery()
         d1.id = "aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         d2 = _make_delivery()
         d2.id = "bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         deliveries = [d1, d2]
-        with patch("app.services.webhook_service.create_delivery", side_effect=deliveries), patch(
-            "app.tasks.celery_app.celery_app",
-            _make_celery_mock(eager=False),
+        with (
+            patch("app.services.webhook_service.create_delivery", side_effect=deliveries),
+            patch(
+                "app.tasks.celery_app.celery_app",
+                _make_celery_mock(eager=False),
+            ),
         ):
             result = trigger_sla_violation_webhooks(mock_db, {"device_id": "d1"})
 

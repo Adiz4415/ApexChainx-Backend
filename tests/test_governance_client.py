@@ -4,11 +4,8 @@ Validates that governance operations return correct response shapes
 and that audit events are logged for each action.
 """
 
-from unittest.mock import patch
-
 import pytest
 
-from app.core.config import settings
 from app.services.contracts.governance_client import (
     GovernanceError,
     accept_admin,
@@ -18,6 +15,14 @@ from app.services.contracts.governance_client import (
     propose_operator,
     renounce_admin,
 )
+
+
+@pytest.fixture(autouse=True)
+def _governance_enabled(settings):
+    """These tests exercise the simulated local_adapter responses, which are
+    gated behind GOVERNANCE_ENABLED. Enable the flag for each test; the
+    shared ``settings`` fixture restores the original value afterwards."""
+    settings.GOVERNANCE_ENABLED = True
 
 
 class TestProposeAdmin:

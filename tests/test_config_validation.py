@@ -14,7 +14,10 @@ class ConfigValidationTests(unittest.TestCase):
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # CELERY_TASK_ALWAYS_EAGER is intentionally omitted: the class
+            # default is False, which is the only valid value for the
+            # production/staging fixtures below (#510 rejects eager mode
+            # outside local/test).
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",
@@ -76,21 +79,15 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_default_secret_key_rejected_in_production(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="apexchainx-dev-secret")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="apexchainx-dev-secret"))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
     def test_default_secret_key_accepted_in_local(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="local", SECRET_KEY="apexchainx-dev-secret")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="local", SECRET_KEY="apexchainx-dev-secret"))
 
     def test_default_secret_key_accepted_in_test(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="test", SECRET_KEY="apexchainx-dev-secret")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="test", SECRET_KEY="apexchainx-dev-secret"))
 
     def test_custom_secret_key_accepted_in_production(self):
         validate_critical_settings(
@@ -118,9 +115,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_whitespace_only_secret_key_rejected_in_production(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="   ")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="   "))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
@@ -130,9 +125,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_default_secret_key_rejected_in_staging(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="staging", SECRET_KEY="apexchainx-dev-secret")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="staging", SECRET_KEY="apexchainx-dev-secret"))
 
         self.assertIn("SECRET_KEY must be set to a secure", str(ctx.exception))
 
@@ -150,9 +143,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_secret_key_error_includes_environment_name(self):
         with self.assertRaises(ValueError) as ctx:
-            validate_critical_settings(
-                self.make_settings(ENVIRONMENT="production", SECRET_KEY="short")
-            )
+            validate_critical_settings(self.make_settings(ENVIRONMENT="production", SECRET_KEY="short"))
 
         self.assertIn("ENVIRONMENT='production'", str(ctx.exception))
 
@@ -217,9 +208,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("PAYMENT_WEBHOOK_SECRET", str(ctx.exception))
 
     def test_webhook_secret_not_checked_in_local(self):
-        validate_critical_settings(
-            self.make_settings(ENVIRONMENT="local", PAYMENT_WEBHOOK_SECRET="")
-        )
+        validate_critical_settings(self.make_settings(ENVIRONMENT="local", PAYMENT_WEBHOOK_SECRET=""))
 
     # ------------------------------------------------------------------ #
     # Minimum length constant                                             #

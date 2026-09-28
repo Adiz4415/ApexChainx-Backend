@@ -9,6 +9,8 @@ rejected the same session. These tests pin the family gate in place and cover th
 race order the issue describes: issue, delete the family, then present the token.
 """
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -34,7 +36,9 @@ def db():
 
 def _register_and_login(db, label: str):
     """Register a throwaway user and log them in; return (login, family_id, email)."""
-    email = f"{label}-{id(object())}@example.com"
+    # uuid4, not id(object()): CPython recycles freed object addresses, so two
+    # fixtures can mint the same email and the second register collides.
+    email = f"{label}-{uuid.uuid4().hex[:12]}@example.com"
     AuthStore.register(
         RegisterRequest(email=email, password=PASSWORD, full_name="Family Test"),
         db=db,
@@ -50,6 +54,12 @@ def logged_in(db):
 
 
 def _delete_family(db, family_id: str) -> None:
+    """Remove the family the way logout-all does: sessions first.
+
+    The sessions.family_id FK has no ON DELETE action, so deleting the family
+    row while a session still references it is rejected by the database.
+    """
+    db.query(SessionORM).filter(SessionORM.family_id == family_id).delete()
     family = TokenFamilyRepository(db).get_family(family_id)
     assert family is not None
     db.delete(family)

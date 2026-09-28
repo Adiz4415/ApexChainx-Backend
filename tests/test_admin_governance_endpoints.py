@@ -3,11 +3,13 @@
 Validates HTTP response shapes and audit logging for governance operations.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.security import require_admin
 from app.main import app
 
 
@@ -16,8 +18,23 @@ client = TestClient(app)
 
 @pytest.fixture
 def admin_headers():
-    """Bypass auth for testing — return minimal headers that pass require_admin."""
-    return {}
+    """Bypass auth for testing — override require_admin with a fake admin.
+
+    An empty-headers approach cannot pass authentication; overriding the
+    dependency exercises the endpoints without real credentials.
+    """
+    from app.models.auth import AuthUser, Role
+
+    fake_admin = AuthUser(
+        id="admin_test",
+        email="admin_test@example.com",
+        full_name="Test Admin",
+        role=Role.admin,
+        created_at=datetime.now(UTC),
+    )
+    app.dependency_overrides[require_admin] = lambda: fake_admin
+    yield {"X-Test-Admin": "1"}
+    app.dependency_overrides.pop(require_admin, None)
 
 
 class TestProposeAdminEndpoint:

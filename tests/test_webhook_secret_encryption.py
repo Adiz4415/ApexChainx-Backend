@@ -98,9 +98,7 @@ class TestStorageLayer:
             # Pinned to version 1: this asserts which secret bytes are used, and
             # version 1 is the payload-only input (#538 added the timestamped v2).
             sig, version, _timestamp = sign_payload(loaded.secret, '{"event": "sla.violation"}', version=1)
-        expected = hmac.new(
-            b"sign-secret-abc", b'{"event": "sla.violation"}', hashlib.sha256
-        ).hexdigest()
+        expected = hmac.new(b"sign-secret-abc", b'{"event": "sla.violation"}', hashlib.sha256).hexdigest()
         assert sig == expected
         assert version == 1
 
@@ -162,7 +160,8 @@ class TestStartupValidation:
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # #510: eager mode is dev-only; production settings must not use it.
+            "CELERY_TASK_ALWAYS_EAGER": False,
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",

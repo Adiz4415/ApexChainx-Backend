@@ -9,6 +9,17 @@ x-app-base: &app-base
   networks:
     - apexchainx-net
 
+# (#565) Probes hit the cheap health routes: /health/live never touches the
+# database, /health/ready is a trivial SELECT 1. Report aggregation stays off
+# the probe path (it remains in /health/readiness for operators).
+x-health-probes: &health-probes
+  healthcheck:
+    test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live').status == 200 else 1)\""]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 30s
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,6 +28,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-apexchainx}
+    ports:
+      # Loopback-only so host-side pytest/alembic reach the documented
+      # postgres:password@localhost:5432 default (Makefile, alembic.ini).
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,6 +46,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      # Loopback-only; the app defaults and CI both point at localhost:6379.
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -42,7 +60,7 @@ services:
       - apexchainx-net
 
   web:
-    <<: *app-base
+    <<: [*app-base, *health-probes]
     ports:
       - "8000:8000"
     depends_on:

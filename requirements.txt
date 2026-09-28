@@ -12,7 +12,9 @@ celery
 httpx
 python-multipart
 email-validator>=2.0
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4 breaks with bcrypt >= 4.1 (72-byte error on every hash call)
+bcrypt==4.0.1
 PyJWT==2.8.0
 hypothesis
 tenacity

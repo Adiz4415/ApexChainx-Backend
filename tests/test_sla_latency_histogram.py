@@ -6,7 +6,8 @@ metric and that the metric is available on the Prometheus endpoint.
 
 from unittest.mock import MagicMock, patch
 
-from app.services.metrics import _SLA_LATENCY_BUCKETS, metrics
+from app.core.security import require_engineer
+from app.services.metrics import INSTANCE_ID, _SLA_LATENCY_BUCKETS, metrics
 
 
 class TestSLALatencyHistogram:
@@ -74,34 +75,49 @@ class TestSLALatencyBuckets:
         metrics.record_histogram("test_latency", 0.15, buckets=[0.01, 0.05, 0.1])
 
         summary = metrics.get_metrics_summary()
-        buckets = summary.get("histogram_buckets", {}).get("test_latency", {})
-        assert buckets[0.01] == 0  # 0.03 > 0.01
-        assert buckets[0.05] == 1  # 0.03 <= 0.05
-        assert buckets[0.1] == 2   # 0.03, 0.07 <= 0.1
+        # Keys carry the instance tag (see metrics._make_key, #336), so look
+        # up the tagged series, not the bare metric name.
+        key = f"test_latency{{instance={INSTANCE_ID}}}"
+        buckets = summary.get("histogram_buckets", {}).get(key, {})
+        # Prometheus semantics: an observation increments exactly one bucket —
+        # the first bound >= value — so unreached bounds are simply absent.
+        assert buckets.get(0.01, 0) == 0  # 0.03 > 0.01
+        assert buckets.get(0.05) == 1  # 0.03 landed here
+        assert buckets.get(0.1) == 1  # 0.07 landed here (0.03 did not)
+        # 0.15 exceeds every bound, so it is only reflected in the count (+Inf).
 
 
 class TestPrometheusEndpointIncludesHistogram:
     def test_latency_histogram_in_prometheus_output(self):
+        from types import SimpleNamespace
+
         from fastapi.testclient import TestClient
 
         from app.main import app
 
+        # /metrics/prometheus is gated on the engineer role (BE-022); bypass
+        # auth the same way the other endpoint tests do.
+        app.dependency_overrides[require_engineer] = lambda: SimpleNamespace(
+            email="metrics@example.com", id="user_metrics", role="engineer"
+        )
         client = TestClient(app)
+        try:
+            # Record a metric first
+            from app.services.sla_service import compute_device_sla
 
-        # Record a metric first
-        from app.services.sla_service import compute_device_sla
+            with patch("app.services.sla_service.SLAOrchestrator") as MockOrch:
+                orch = MagicMock()
+                MockOrch.return_value = orch
+                from datetime import datetime
 
-        with patch("app.services.sla_service.SLAOrchestrator") as MockOrch:
-            orch = MagicMock()
-            MockOrch.return_value = orch
-            from datetime import datetime
+                orch.parse_period.return_value = (datetime(2025, 3, 1), datetime(2025, 4, 1))
+                orch.get_outages_for_device.return_value = []
+                db = MagicMock()
+                compute_device_sla(db, "dev-prom", "2025-03")
 
-            orch.parse_period.return_value = (datetime(2025, 3, 1), datetime(2025, 4, 1))
-            orch.get_outages_for_device.return_value = []
-            db = MagicMock()
-            compute_device_sla(db, "dev-prom", "2025-03")
-
-        resp = client.get("/api/v1/metrics/prometheus")
-        assert resp.status_code == 200
-        text = resp.text
-        assert "sla_computation_latency_seconds" in text
+            resp = client.get("/api/v1/metrics/prometheus")
+            assert resp.status_code == 200
+            text = resp.text
+            assert "sla_computation_latency_seconds" in text
+        finally:
+            app.dependency_overrides.pop(require_engineer, None)

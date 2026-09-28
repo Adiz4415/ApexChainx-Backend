@@ -4,12 +4,19 @@ Public registration must never create admin accounts.  Admin users must be
 created through the dedicated POST /auth/admin/users endpoint.
 """
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.enums import Role
 
 client = TestClient(app)
+
+
+def _unique_email(prefix: str) -> str:
+    """Registration writes real rows; fixed addresses collide across runs."""
+    return f"{prefix}-{uuid4().hex[:10]}@example.com"
 
 
 class TestPublicRegistrationRoleEnforcement:
@@ -20,7 +27,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "normal_register@example.com",
+                "email": _unique_email("normal_register"),
                 "password": "Passw0rd!",
                 "full_name": "Normal User",
             },
@@ -34,7 +41,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "admin_register@example.com",
+                "email": _unique_email("admin_register"),
                 "password": "Passw0rd!",
                 "full_name": "Evil User",
                 "role": "admin",
@@ -48,7 +55,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "engineer_register@example.com",
+                "email": _unique_email("engineer_register"),
                 "password": "Passw0rd!",
                 "full_name": "Crafty User",
                 "role": "engineer",
@@ -61,7 +68,7 @@ class TestPublicRegistrationRoleEnforcement:
         resp = client.post(
             "/api/v1/auth/register",
             json={
-                "email": "sneaky_admin@example.com",
+                "email": _unique_email("sneaky_admin"),
                 "password": "Passw0rd!",
                 "full_name": "Sneaky Admin",
             },
@@ -74,7 +81,8 @@ class TestPublicRegistrationRoleEnforcement:
 class TestEngineerCannotAccessAdminRoutes:
     """Engineers must not be able to call admin-gated endpoints."""
 
-    def _register_and_login(self, email: str = "eng_user@example.com") -> str:
+    def _register_and_login(self, email: str | None = None) -> str:
+        email = email or _unique_email("eng_user")
         """Register a user and return the access token."""
         client.post(
             "/api/v1/auth/register",
@@ -93,7 +101,7 @@ class TestEngineerCannotAccessAdminRoutes:
 
     def test_engineer_cannot_create_webhook(self):
         """Engineer role is rejected by require_admin on webhook creation."""
-        token = self._register_and_login("eng_webhook@example.com")
+        token = self._register_and_login()
         resp = client.post(
             "/api/v1/webhooks",
             json={
@@ -107,7 +115,7 @@ class TestEngineerCannotAccessAdminRoutes:
 
     def test_engineer_cannot_access_admin_session_inventory(self):
         """Engineer role is rejected on admin session inventory."""
-        token = self._register_and_login("eng_sessions@example.com")
+        token = self._register_and_login()
         resp = client.get(
             "/api/v1/auth/admin/sessions/someone@example.com",
             headers={"Authorization": f"Bearer {token}"},
@@ -116,11 +124,12 @@ class TestEngineerCannotAccessAdminRoutes:
 
     def test_engineer_cannot_create_user_via_admin_endpoint(self):
         """Engineer role is rejected on admin user creation endpoint."""
-        token = self._register_and_login("eng_create_user@example.com")
+        token = self._register_and_login()
+        email = f"newuser-{uuid4().hex[:10]}@example.com"
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "newuser@example.com",
+                "email": email,
                 "password": "Passw0rd!",
                 "full_name": "New User",
                 "role": "engineer",
@@ -152,17 +161,17 @@ class TestAdminUserCreationEndpoint:
         We'll use a mock approach — create a user directly and mock auth.
         """
         # We'll use the DB directly to create an admin user for testing
-        from app.db.session import SessionLocal
         from app.core.security import get_password_hash
+        from app.db.session import SessionLocal
         from app.repositories.user_repository import UserRepository
 
+        admin_email = _unique_email("test_admin")
         with SessionLocal() as db:
             repo = UserRepository(db)
-            if not repo.get_by_email("test_admin@example.com"):
-                from uuid import uuid4
+            if not repo.get_by_email(admin_email):
                 repo.create(
                     user_id=f"admin_{uuid4().hex[:8]}",
-                    email="test_admin@example.com",
+                    email=admin_email,
                     hashed_password=get_password_hash("Admin123!"),
                     full_name="Test Admin",
                     role=Role.admin,
@@ -171,7 +180,7 @@ class TestAdminUserCreationEndpoint:
         # Now login to get a token
         login_resp = client.post(
             "/api/v1/auth/login",
-            json={"email": "test_admin@example.com", "password": "Admin123!"},
+            json={"email": admin_email, "password": "Admin123!"},
         )
         assert login_resp.status_code == 200
         return login_resp.json()["access_token"]
@@ -179,10 +188,11 @@ class TestAdminUserCreationEndpoint:
     def test_admin_can_create_engineer_user(self):
         """Admin can create a new engineer user via admin endpoint."""
         token = self._get_admin_token()
+        created_engineer_email = _unique_email("created_engineer")
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "created_engineer@example.com",
+                "email": created_engineer_email,
                 "password": "Passw0rd!",
                 "full_name": "Created Engineer",
                 "role": "engineer",
@@ -192,7 +202,7 @@ class TestAdminUserCreationEndpoint:
         assert resp.status_code == 201, resp.json()
         data = resp.json()
         assert data["role"] == "engineer"
-        assert data["email"] == "created_engineer@example.com"
+        assert data["email"] == created_engineer_email
 
     def test_admin_can_create_admin_user(self):
         """Admin can create another admin user via admin endpoint."""
@@ -200,7 +210,7 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "created_admin@example.com",
+                "email": _unique_email("created_admin"),
                 "password": "AdminPass1!",
                 "full_name": "Created Admin",
                 "role": "admin",
@@ -214,11 +224,12 @@ class TestAdminUserCreationEndpoint:
     def test_admin_create_user_duplicate_email_rejected(self):
         """Creating a user with a duplicate email returns 400."""
         token = self._get_admin_token()
+        dupe_email = _unique_email("dupe_user")
         # First creation
         client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "dupe_user@example.com",
+                "email": dupe_email,
                 "password": "Passw0rd!",
                 "full_name": "User One",
                 "role": "engineer",
@@ -229,7 +240,7 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "dupe_user@example.com",
+                "email": dupe_email,
                 "password": "Passw0rd!",
                 "full_name": "User Two",
                 "role": "engineer",
@@ -245,8 +256,8 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "weak_pw@example.com",
-                "password": "123",
+                "email": _unique_email("weak_pw"),
+                "password": "alllowercase",
                 "full_name": "Weak PW",
                 "role": "engineer",
             },
@@ -260,7 +271,7 @@ class TestAdminUserCreationEndpoint:
         resp = client.post(
             "/api/v1/auth/admin/users",
             json={
-                "email": "noauth@example.com",
+                "email": _unique_email("noauth"),
                 "password": "Passw0rd!",
                 "full_name": "No Auth",
                 "role": "engineer",

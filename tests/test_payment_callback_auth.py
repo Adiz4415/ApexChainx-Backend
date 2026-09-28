@@ -168,13 +168,16 @@ class TestStartupValidation:
             "ALLOWED_ORIGINS": ["http://localhost:3000"],
             "CELERY_BROKER_URL": "redis://localhost:6379/0",
             "CELERY_RESULT_BACKEND": "redis://localhost:6379/0",
-            "CELERY_TASK_ALWAYS_EAGER": True,
+            # #510: eager mode is dev-only; production settings must not use it.
+            "CELERY_TASK_ALWAYS_EAGER": False,
             "SLA_CONTRACT_ADDRESS": "local-sla-calculator",
             "STELLAR_NETWORK": "testnet",
             "CONTRACT_EXECUTION_MODE": "local_adapter",
             "ENVIRONMENT": "production",
             "SECRET_KEY": "a-very-long-secure-production-secret-key-1234567890",
             "PAYMENT_WEBHOOK_SECRET": "some-secret",
+            # Required outside local/test since the webhook-secret encryption guard.
+            "WEBHOOK_SECRET_ENCRYPTION_KEY": "V5OOA_Ao70n9OxGEbj1WmRsZX6vI4IdtuJ_jYcIhNDg=",
         }
         defaults.update(overrides)
         return Settings.model_construct(**defaults)

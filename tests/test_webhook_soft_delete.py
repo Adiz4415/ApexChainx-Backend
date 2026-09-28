@@ -58,7 +58,9 @@ def _session(webhook):
             # list_webhook_deliveries pages with a window-count column.
             paged = query.filter.return_value.add_columns.return_value
             paged.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-            paged.order_by.return_value.count.return_value = 0
+            # Empty page: the endpoint falls back to a plain COUNT on the
+            # filtered query (`query.order_by(None).count()`).
+            query.filter.return_value.order_by.return_value.count.return_value = 0
         return query
 
     mock_db.query.side_effect = _query
@@ -191,11 +193,33 @@ class TestTombstonesStayReadable:
 class TestListHidesTombstones:
     def _list_session(self):
         mock_db = MagicMock()
-        mock_db.query.return_value.offset.return_value.limit.return_value.all.return_value = []
+        # The list endpoint pages with a window-count column (#554) and falls
+        # back to a plain COUNT when the page is empty. The COUNT and the page
+        # query run on the same (possibly filtered) query object, so stub both
+        # the unfiltered chain (include_deleted=true) and the filtered one
+        # (default request always applies the deleted_at filter).
+        for query in (mock_db.query.return_value, mock_db.query.return_value.filter.return_value):
+            paged = query.add_columns.return_value
+            paged.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
+            query.order_by.return_value.count.return_value = 0
         return mock_db
 
     def _applied_filters(self, mock_db) -> str:
-        return " ".join(str(call) for call in mock_db.query.return_value.filter.call_args_list)
+        # BinaryExpression reprs don't reliably include column names across
+        # SQLAlchemy builds, so surface the compared column identity too.
+        from app.models.webhook import Webhook
+
+        parts = []
+        for call in mock_db.query.return_value.filter.call_args_list:
+            for arg in call.args:
+                text = str(arg)
+                left = getattr(getattr(arg, "left", None), "key", "")
+                if left:
+                    text += f" column:{left}"
+                if getattr(arg, "left", None) is Webhook.deleted_at:
+                    text += " column:deleted_at"
+                parts.append(text)
+        return " ".join(parts)
 
     def test_list_excludes_deleted_by_default(self, admin_override):
         mock_db = self._list_session()

@@ -139,6 +139,12 @@ class _FakeWebhook:
         self.secret_version = 3
         self.last_secret_rotation_at = NOW - timedelta(days=1)
         self.previous_secrets = previous_secrets
+        # Rotation is a mutation, refused on tombstones (#518).
+        self.deleted_at = None
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
 
 
 class _RecordingAuditLog:

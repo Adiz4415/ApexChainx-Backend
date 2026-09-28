@@ -27,6 +27,9 @@ dependencies = [
     "PyJWT==2.8.0",
     "email-validator>=2.0",
     "passlib[bcrypt]==1.7.4",
+    # passlib 1.7.4 is incompatible with bcrypt >= 4.1 (removed __about__;
+    # raises "password cannot be longer than 72 bytes" on every hash call).
+    "bcrypt==4.0.1",
     "gunicorn==23.0.0",
     "opentelemetry-api==1.29.0",
     "opentelemetry-sdk==1.29.0",
@@ -91,6 +94,13 @@ disable_error_code = [
     "index",
     "var-annotated",
 ]
+
+# The transitive `deprecated` package (via tenacity) uses 3.12+ `type`
+# statement syntax, which mypy cannot parse when python_version = "3.11".
+# Nothing in app/ imports it directly; skip analyzing it.
+[[tool.mypy.overrides]]
+module = "deprecated.*"
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

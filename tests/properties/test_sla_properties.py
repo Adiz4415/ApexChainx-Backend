@@ -49,13 +49,13 @@ MAX_OUTAGE_DURATION_MINUTES = 60 * 24 * 7  # up to 7 days
 
 @st.composite
 def resolved_outage(draw: st.DrawFn) -> SimpleNamespace:  # type: ignore[type-arg]
-    """A fully-resolved outage: both started_at and resolved_at are present.
+    """A fully-resolved outage: both detected_at and resolved_at are present.
 
     Unresolved outages are intentionally excluded from the property suite:
     their MTTR/availability math uses wall-clock time (datetime.now), which
     is not reproducible — everything here stays deterministic.
     """
-    started_at = draw(
+    detected_at = draw(
         st.datetimes(
             timezones=st.just(UTC),
             min_value=datetime(2024, 1, 1, tzinfo=UTC),
@@ -63,8 +63,9 @@ def resolved_outage(draw: st.DrawFn) -> SimpleNamespace:  # type: ignore[type-ar
         )
     )
     duration_minutes = draw(st.integers(min_value=0, max_value=MAX_OUTAGE_DURATION_MINUTES))
-    resolved_at = started_at + timedelta(minutes=duration_minutes)
-    return SimpleNamespace(started_at=started_at, resolved_at=resolved_at)
+    resolved_at = detected_at + timedelta(minutes=duration_minutes)
+    # The ORM column is ``detected_at`` (#377); SLAOrchestrator reads that name.
+    return SimpleNamespace(detected_at=detected_at, resolved_at=resolved_at)
 
 
 @st.composite
@@ -118,11 +119,11 @@ def _extra_outage(outages: list[SimpleNamespace]) -> SimpleNamespace:
         base = outages[0]
     else:
         base = SimpleNamespace(
-            started_at=datetime(2025, 1, 1, tzinfo=UTC),
+            detected_at=datetime(2025, 1, 1, tzinfo=UTC),
             resolved_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
     return SimpleNamespace(
-        started_at=base.started_at,
+        detected_at=base.detected_at,
         resolved_at=base.resolved_at + timedelta(minutes=MAX_OUTAGE_DURATION_MINUTES),
     )
 

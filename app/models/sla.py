@@ -142,5 +142,7 @@ class SLAAnalyticsSnapshot(BaseModel):
     total_penalties: float = Field(ge=0.0)
     net_payout: float
     avg_mttr: float = Field(ge=0.0)
+    # (#567) Highest SLA policy version across severities at snapshot time.
+    policy_version: int | None = None
     checksum: str
     created_at: str | None = None

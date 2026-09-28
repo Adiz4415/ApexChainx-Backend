@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.exceptions import ApexWalletAlreadyExistsError
 from app.core.security import require_engineer
@@ -29,8 +30,18 @@ CREATE_PATH = "/api/v1/wallets/create"
 
 @pytest.fixture(scope="function")
 def db() -> Session:
-    """In-memory SQLite session, like the other wallet persistence tests."""
-    engine = create_engine("sqlite:///:memory:", echo=False)
+    """In-memory SQLite session, like the other wallet persistence tests.
+
+    StaticPool keeps a single shared connection: TestClient serves requests
+    from a worker thread, and the default per-thread pooling of :memory: gives
+    the worker an empty database ("no such table: wallets").
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        echo=False,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     try:

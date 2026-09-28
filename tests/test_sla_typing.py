@@ -9,7 +9,7 @@ import io
 
 import pytest
 
-from app.models.sla import SLACalculationError, SLACalculationResult
+from app.models.sla import SLACalculationError, SLACalculationResult, SLADashboardKPI, SLATrendPoint
 from app.utils.analytics_exporter import export_analytics_summary
 
 
@@ -121,30 +121,12 @@ class TestSLACalculationError:
 
 class TestAnalyticsSummaryCSV:
     """CSV export must be RFC 4180-compliant (single header, uniform rows)."""
-    def _make_summary(self, include_trends: bool) -> dict:
-        summary = {
-            "kpi": {
-                "total_outages": 1,
-                "availability": 99.9,
-                "violations": 0,
-                "rewards": 1,
-                "penalties": 0,
-            },
-            "trends": [],
-            "trend_count": 0,
-        }
-        if include_trends:
-            summary["trends"] = [
-                {
-                    "date": "2025-03-01",
-                    "total_outages": 0,
-                    "violations": 0,
-                    "rewards": 0,
-                    "penalties": 0,
-                }
-            ]
-            summary["trend_count"] = 1
-        return summary
+
+    _KPI = SLADashboardKPI(total_outages=1, total_violations=0, total_rewards=1.0, total_penalties=0.0, net_payout=1.0)
+
+    @staticmethod
+    def _trend(date: str) -> SLATrendPoint:
+        return SLATrendPoint(date=date, total_outages=0, violations=0, rewards=0.0, penalties=0.0)
 
     def _parse(self, csv_output) -> list[list[str]]:
         if isinstance(csv_output, bytes):
@@ -152,31 +134,21 @@ class TestAnalyticsSummaryCSV:
         return list(csv.reader(io.StringIO(csv_output)))
 
     def test_populated_summary_uniform_columns(self):
-        summary = self._make_summary(include_trends=True)
-        csv_output = export_analytics_summary(summary, format="csv")
+        csv_output = export_analytics_summary(self._KPI, [self._trend("2025-03-01")], format="csv")
         rows = self._parse(csv_output)
 
         assert rows, "CSV should have at least a header row"
         column_counts = {len(row) for row in rows}
-        assert len(column_counts) == 1, (
-            f"Rows have inconsistent column counts: {sorted(column_counts)}"
-        )
-        assert not any(row and row[0].startswith("#") for row in rows), (
-            "Found comment/non-standard line"
-        )
+        assert len(column_counts) == 1, f"Rows have inconsistent column counts: {sorted(column_counts)}"
+        assert not any(row and row[0].startswith("#") for row in rows), "Found comment/non-standard line"
         assert not any(not row for row in rows), "Found blank line"
 
     def test_empty_trends_same_schema(self):
-        summary_with = self._make_summary(include_trends=True)
-        summary_empty = self._make_summary(include_trends=False)
-
-        csv_with = self._parse(export_analytics_summary(summary_with, format="csv"))
-        csv_empty = self._parse(export_analytics_summary(summary_empty, format="csv"))
+        csv_with = self._parse(export_analytics_summary(self._KPI, [self._trend("2025-03-01")], format="csv"))
+        csv_empty = self._parse(export_analytics_summary(self._KPI, [], format="csv"))
 
         assert len({len(row) for row in csv_with}) == 1
         assert len({len(row) for row in csv_empty}) == 1
 
         # Both CSVs must expose the exact same schema (header row) — no hardcoded fallback.
-        assert csv_with[0] == csv_empty[0], (
-            "Empty dataset must use the same header as populated dataset"
-        )
+        assert csv_with[0] == csv_empty[0], "Empty dataset must use the same header as populated dataset"

@@ -24,7 +24,7 @@ from app.db.session import SessionLocal
 from app.main import app
 from app.models.auth import LoginRequest, RegisterRequest
 from app.services.auth_store import AuthStore
-from app.services.metrics import metrics
+from app.services.metrics import INSTANCE_ID, metrics
 
 SECRET = settings.SECRET_KEY or "apexchainx-dev-secret"
 PASSWORD = "TestPass123!"
@@ -52,7 +52,9 @@ def _failure_records(caplog):
 
 
 def _counter_delta(before: dict, reason: str) -> float:
-    key = f"{IMPERSONATION_VERIFICATION_FAILURES}{{reason={reason}}}"
+    # Keys carry an instance tag (see metrics._make_key), so the lookup must
+    # include it — a bare reason tag never matches (#336).
+    key = f"{IMPERSONATION_VERIFICATION_FAILURES}{{instance={INSTANCE_ID},reason={reason}}}"
     after = metrics.get_metrics_summary()["counters"]
     return after.get(key, 0.0) - before.get(key, 0.0)
 
@@ -61,7 +63,9 @@ def _counters_snapshot() -> dict:
     return dict(metrics.get_metrics_summary()["counters"])
 
 
-def _mint_impersonation_token(sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET) -> str:
+def _mint_impersonation_token(
+    sub: str, *, exp_offset: int = 900, scope: str = "impersonate", secret: str = SECRET
+) -> str:
     now = int(time.time())
     payload = {
         "sub": sub,
@@ -88,9 +92,7 @@ class TestImpersonationFailureObservability:
             (lambda: _mint_impersonation_token("user_00000000", scope="outages:read"), "wrong_scope"),
         ],
     )
-    def test_failed_verification_falls_through_and_records(
-        self, client, caplog, token_factory, expected_reason
-    ):
+    def test_failed_verification_falls_through_and_records(self, client, caplog, token_factory, expected_reason):
         caplog.set_level(logging.WARNING)
         before = _counters_snapshot()
         correlation_id = f"test-corr-{uuid.uuid4().hex[:12]}"

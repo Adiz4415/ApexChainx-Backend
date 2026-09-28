@@ -4,10 +4,8 @@ Validates that USE_REDIS_RATE_LIMITER defaults to True so that
 Redis-backed rate limiting is used across multiple Gunicorn workers.
 """
 
-import pytest
-
 from app.core.config import settings
-from app.core.rate_limiter import RedisRateLimiter, SimpleRateLimiter, rate_limiter
+from app.core.rate_limiter import SimpleRateLimiter
 
 
 class TestRateLimiterDefault:
@@ -25,7 +23,10 @@ class TestRateLimiterDefault:
         import app.core.rate_limiter as rl_mod
 
         reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, RedisRateLimiter)
+        # Check against the reloaded module's classes: reload re-creates the
+        # class objects, and an isinstance check against the pre-reload import
+        # would always be False.
+        assert isinstance(rl_mod.rate_limiter, rl_mod.RedisRateLimiter)
 
     def test_module_level_rate_limiter_is_simple_when_disabled(self, monkeypatch):
         """When USE_REDIS_RATE_LIMITER=False, rate_limiter is SimpleRateLimiter."""
@@ -36,7 +37,7 @@ class TestRateLimiterDefault:
         import app.core.rate_limiter as rl_mod
 
         reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, SimpleRateLimiter)
+        assert isinstance(rl_mod.rate_limiter, rl_mod.SimpleRateLimiter)
 
     def test_module_level_rate_limiter_is_simple_when_eager(self, monkeypatch):
         """When CELERY_TASK_ALWAYS_EAGER=True, rate_limiter is SimpleRateLimiter even if Redis enabled."""
@@ -48,7 +49,7 @@ class TestRateLimiterDefault:
         import app.core.rate_limiter as rl_mod
 
         reload(rl_mod)
-        assert isinstance(rl_mod.rate_limiter, SimpleRateLimiter)
+        assert isinstance(rl_mod.rate_limiter, rl_mod.SimpleRateLimiter)
 
 
 class TestSimpleRateLimiterIsolation:

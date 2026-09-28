@@ -139,7 +139,9 @@ def test_benchmark_webhook_header_building(benchmark):
 
     headers = benchmark(_build_headers, webhook, payload)
     assert "X-Webhook-Signature" in headers
-    assert "traceparent" in headers
+    # #300: traceparent is only injected when a real OTel span is active —
+    # there is none in this benchmark, so it must be absent, not fabricated.
+    assert "traceparent" not in headers
 
 
 # ── Benchmark 5: Period parsing ──────────────────────────────────────────────

@@ -5,16 +5,32 @@ and that the admin retry-now endpoint bypasses backoff.
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints.payments import _compute_next_retry_at
+from app.core.security import require_admin, require_engineer
 from app.main import app
 from app.models.payment import PaymentTransaction
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def _bypass_auth():
+    """Retry endpoints are role-gated (BE-022); stub the auth dependencies."""
+    app.dependency_overrides[require_engineer] = lambda: SimpleNamespace(
+        email="engineer@example.com", id="user_engineer", role="engineer"
+    )
+    app.dependency_overrides[require_admin] = lambda: SimpleNamespace(
+        email="admin@example.com", id="user_admin", role="admin"
+    )
+    yield
+    app.dependency_overrides.pop(require_engineer, None)
+    app.dependency_overrides.pop(require_admin, None)
 
 
 class TestComputeNextRetryAt:
@@ -33,9 +49,14 @@ class TestComputeNextRetryAt:
         result = _compute_next_retry_at(2, base)
         assert result == base + timedelta(seconds=120)
 
-    def test_capped_at_1_hour(self):
+    def test_capped_at_1_hour(self, monkeypatch):
+        """With a retry budget high enough to reach the cap, delay tops at 3600s."""
+        monkeypatch.setattr(
+            "app.api.v1.endpoints.payments.PaymentRepository.MAX_RETRIES", 10
+        )
         base = datetime(2025, 1, 1, tzinfo=UTC)
-        result = _compute_next_retry_at(10, base)
+        # 30 * 2**6 = 1920 < 3600; 30 * 2**7 = 3840 -> capped at 3600.
+        result = _compute_next_retry_at(7, base)
         assert result == base + timedelta(seconds=3600)
 
     def test_returns_none_at_max_retries(self):
@@ -44,10 +65,14 @@ class TestComputeNextRetryAt:
 
 
 class TestRetryQueueEndpoint:
+    @pytest.mark.usefixtures("_bypass_auth")
     @patch("app.api.v1.endpoints.payments.PaymentRepository")
     def test_returns_retry_queue_items(self, MockRepo):
         mock_repo = MagicMock()
         MockRepo.return_value = mock_repo
+        # _compute_next_retry_at reads PaymentRepository.MAX_RETRIES; the patch
+        # replaces the class, so the attribute must be a real int.
+        MockRepo.MAX_RETRIES = 3
         now = datetime.now(UTC)
         mock_repo.list.return_value = (
             [
@@ -72,8 +97,11 @@ class TestRetryQueueEndpoint:
         resp = client.get("/api/v1/payments/retry-queue")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        item = data[0]
+        # CursorPage envelope (#cursor pagination), not a bare list.
+        assert data["has_more"] is False
+        items = data["items"]
+        assert len(items) == 1
+        item = items[0]
         assert item["id"] == "pay_001"
         assert item["attempt_count"] == 1
         assert item["backoff_seconds"] == 60
@@ -81,6 +109,7 @@ class TestRetryQueueEndpoint:
 
 
 class TestRetryNowEndpoint:
+    @pytest.mark.usefixtures("_bypass_auth")
     @patch("app.api.v1.endpoints.payments.audit_log")
     @patch("app.api.v1.endpoints.payments.PaymentRepository")
     def test_admin_can_retry_immediately(self, MockRepo, mock_audit):
@@ -123,6 +152,7 @@ class TestRetryNowEndpoint:
         assert resp.json()["retry_count"] == 1
         mock_audit.log.assert_called_once()
 
+    @pytest.mark.usefixtures("_bypass_auth")
     @patch("app.api.v1.endpoints.payments.PaymentRepository")
     def test_returns_404_when_not_found(self, MockRepo):
         mock_repo = MagicMock()
@@ -132,6 +162,7 @@ class TestRetryNowEndpoint:
         resp = client.post("/api/v1/payments/retry-queue/nonexistent/retry")
         assert resp.status_code == 404
 
+    @pytest.mark.usefixtures("_bypass_auth")
     @patch("app.api.v1.endpoints.payments.PaymentRepository")
     def test_returns_409_when_max_retries_reached(self, MockRepo):
         mock_repo = MagicMock()

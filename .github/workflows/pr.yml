@@ -153,8 +153,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      # GitHub Actions does not support YAML anchors/aliases, so the env block
+      # is repeated per step (an aliased block made the whole file invalid and
+      # every run fail in 0s before any job started).
       - name: Property-based tests
-        env: &ci-env
+        env:
           ENVIRONMENT: test
           WEBHOOK_URL_VALIDATOR_BYPASS: "true"
           CELERY_TASK_ALWAYS_EAGER: "true"
@@ -166,9 +169,25 @@ jobs:
         run: pytest tests/properties -ra
 
       - name: Benchmarks
-        env: *ci-env
+        env:
+          ENVIRONMENT: test
+          WEBHOOK_URL_VALIDATOR_BYPASS: "true"
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          USE_REDIS_RATE_LIMITER: "false"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          REDIS_URL: redis://localhost:6379/0
         run: pytest tests/benchmarks -ra
 
       - name: Chaos tests
-        env: *ci-env
+        env:
+          ENVIRONMENT: test
+          WEBHOOK_URL_VALIDATOR_BYPASS: "true"
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          USE_REDIS_RATE_LIMITER: "false"
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/${{ env.POSTGRES_DB }}
+          REDIS_URL: redis://localhost:6379/0
         run: pytest tests/chaos -ra
