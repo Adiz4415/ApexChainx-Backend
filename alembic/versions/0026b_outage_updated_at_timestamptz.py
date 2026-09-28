@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Convert outages.updated_at from naive timestamp to timezone-aware timestamptz.
 
 Revision ID: 0026b_outage_updated_at_timestamptz
