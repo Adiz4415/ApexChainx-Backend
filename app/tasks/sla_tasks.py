@@ -178,9 +178,14 @@ def compute_sla_for_device(
         self._mark_success(db, self.request.id, result)
         logger.info("SLA computation complete for device=%s", device_id)
 
-        # (#275) compute_device_sla already emits the initiated/succeeded
-        # settlement audit events; emitting them again here duplicated every
-        # computation's audit trail. Single emit point stays in the service.
+        # (#236) Settlement audit events are emitted here, AFTER the job marked
+        # success — never inside compute_device_sla, whose caller transaction
+        # may still roll back. A failed commit must not leave a “succeeded”
+        # audit trail behind.
+        from app.services.sla_service import record_sla_settlement_audit_events
+
+        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
+        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
         return result
 
     except ApexTransientError:

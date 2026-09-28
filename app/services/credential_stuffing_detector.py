@@ -9,7 +9,8 @@ carrier-grade NAT, a CI runner pool) one attacker spraying from that address
 locked out every legitimate user behind it for ``AUTH_LOCKOUT_DURATION_MINUTES
 * 4``.  Detection is now recorded at three scopes:
 
-* ``cred_stuffing:ip``      - every attempt from the address (alerting only),
+* ``cred_stuffing:ip``      - every (account, password) attempt from the
+  address (alerting only),
 * ``cred_stuffing:pair``    - one (IP, account) pair, **this is what locks**,
 * ``cred_stuffing:account`` - one account across every source IP, which is what
   a distributed spray looks like and what an IP-scoped detector can never see.
@@ -67,13 +68,24 @@ class CredentialStuffingDetector:
         window = settings.AUTH_CREDENTIAL_STUFFING_WINDOW_MINUTES * 60
         ttl = int(window) + 60
 
-        keys = [self._ip_key(ip)]
-        if account:
-            keys.append(self._pair_key(ip, account))
-            keys.append(self._account_key(account))
+        if not account:
+            keys: list[tuple[str, str]] = [(self._ip_key(ip), bucket)]
+        else:
+            # Each scope counts distinct (other-identity, password) pairs, not
+            # bare passwords. A distributed spray re-uses one leaked list from
+            # many IPs: unique-password counting at the account scope would see
+            # only len(list) entries no matter how many machines participate.
+            # The pair scope keeps counting unique passwords — it is the scope
+            # that locks a single (IP, account) pair.
+            account_hash = self._account_hash(account)
+            keys = [
+                (self._ip_key(ip), f"{account_hash}:{bucket}"),
+                (self._pair_key(ip, account), bucket),
+                (self._account_key(account), f"{ip}:{bucket}"),
+            ]
 
-        for key in keys:
-            self.redis.zadd(key, {bucket: now})
+        for key, member in keys:
+            self.redis.zadd(key, {member: now})
             self.redis.zremrangebyscore(key, "-inf", now - window)
             self.redis.expire(key, ttl)
 

@@ -228,9 +228,12 @@ def compute_device_sla(
                 violation_reasons=[],
             )
             latency = time.monotonic() - start_time
-            record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "no_outages"}, buckets=_SLA_LATENCY_BUCKETS)
-            record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-            record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+            record_histogram(
+                "sla_computation_latency_seconds",
+                latency,
+                tags={"device_id": device_id, "period": period, "status": "no_outages"},
+                buckets=_SLA_LATENCY_BUCKETS,
+            )
             if cache is not None:
                 cache.set(device_id, period, result.model_dump())
             return result
@@ -289,9 +292,12 @@ def compute_device_sla(
             ],
         )
         latency = time.monotonic() - start_time
-        record_histogram("sla_computation_latency_seconds", latency, tags={"period": period, "status": "violated" if is_violated else "ok"}, buckets=_SLA_LATENCY_BUCKETS)
-        record_sla_settlement_audit_events(device_id, period, result, status="initiated")
-        record_sla_settlement_audit_events(device_id, period, result, status="succeeded")
+        record_histogram(
+            "sla_computation_latency_seconds",
+            latency,
+            tags={"device_id": device_id, "period": period, "status": "violated" if is_violated else "ok"},
+            buckets=_SLA_LATENCY_BUCKETS,
+        )
         if cache is not None:
             cache.set(device_id, period, result.model_dump())
         return result
@@ -315,11 +321,15 @@ def record_sla_settlement_audit_events(
     status: str = "initiated",
     error: str | None = None,
 ) -> None:
+    """Emit a settlement audit event. Callers must invoke this AFTER the
+    transaction commits (issue #236) — never from inside a transaction."""
     event_type = f"sla_settlement_{status}"
-    details = {
+    details: dict[str, Any] = {
         "device_id": device_id,
         "period": period,
-        "sla_result": sla_result,
+        # audit_log details land in a JSON column: a raw Pydantic model is not
+        # JSON-serializable, so flatten it here.
+        "sla_result": sla_result.model_dump(mode="json") if isinstance(sla_result, SLACalculationResult) else sla_result,
     }
     if error:
         details["error"] = error

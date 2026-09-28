@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import settings
 from app.models.enums import OutageStatus, Severity
@@ -82,12 +82,16 @@ class OutageCreate(BaseModel):
     @classmethod
     def validate_detected_at_timezone(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
-            raise ValidationError("detected_at must be timezone-aware")
+            # pydantic v2 wraps ValueError from validators into a proper
+            # ValidationError; raising ValidationError directly crashes.
+            raise ValueError("detected_at must be timezone-aware")
         # Normalize to UTC
         if v.tzinfo != UTC:
             v = v.astimezone(UTC)
         # Reject dates more than 60 seconds in the future (configurable skew tolerance)
-        max_detected_at = datetime.now(UTC) + timedelta(seconds=getattr(settings, 'OUTAGE_FUTURE_DETECTION_SKEW_SECONDS', 60))
+        max_detected_at = datetime.now(UTC) + timedelta(
+            seconds=getattr(settings, "OUTAGE_FUTURE_DETECTION_SKEW_SECONDS", 60)
+        )
         if v > max_detected_at:
             raise ValueError(
                 f"detected_at cannot be in the future. Received {v.isoformat()}, "

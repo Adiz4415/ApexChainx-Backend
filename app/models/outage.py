@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Location(BaseModel):
@@ -35,7 +35,9 @@ class Outage(BaseModel):
     @classmethod
     def validate_detected_at_timezone(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
-            raise ValidationError("detected_at must be timezone-aware")
+            # pydantic v2 wraps ValueError from validators into a proper
+            # ValidationError; raising ValidationError directly crashes.
+            raise ValueError("detected_at must be timezone-aware")
         # Normalize to UTC
         if v.tzinfo != UTC:
             v = v.astimezone(UTC)
@@ -47,7 +49,7 @@ class Outage(BaseModel):
         if v is None:
             return None
         if v.tzinfo is None:
-            raise ValidationError("resolved_at must be timezone-aware")
+            raise ValueError("resolved_at must be timezone-aware")
         # Normalize to UTC
         if v.tzinfo != UTC:
             v = v.astimezone(UTC)

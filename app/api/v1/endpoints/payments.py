@@ -197,100 +197,6 @@ def get_payment_reconciliation_history(
     )
 
 
-@router.get("/{transaction_id}", response_model=PaymentTransaction)
-def get_payment(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
-    repo = PaymentRepository(db)
-    payment = repo.get(transaction_id)
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
-    return payment
-
-
-class ReconcileRequest(BaseModel):
-    status: str
-
-
-@router.post("/{transaction_id}/reconcile", response_model=PaymentTransaction)
-def reconcile_payment(
-    transaction_id: str, payload: ReconcileRequest, current_user=Depends(require_admin), db: Session = Depends(get_db)
-):
-    repo = PaymentRepository(db)
-    existing = repo.get(transaction_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
-
-    try:
-        payment = repo.reconcile(transaction_id, payload.status)
-    except PaymentTransitionError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": str(exc),
-                "current_status": exc.current,
-                "requested_status": exc.next_status,
-                "allowed_transitions": list(exc.allowed),
-            },
-        )
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
-
-    # BE-027: Include previous status in audit log for reconciliation history
-    audit_log.log(
-        "payment_reconciled",
-        {
-            "id": transaction_id,
-            "previous_status": existing.status,
-            "status": payload.status,
-        },
-    )
-    return payment
-
-
-@router.post("/{transaction_id}/retry", response_model=PaymentTransaction)
-def retry_payment(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
-    repo = PaymentRepository(db)
-    existing = repo.get(transaction_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Payment not found")
-    try:
-        payment = repo.retry(transaction_id)
-    except PaymentTransitionError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": str(exc),
-                "current_status": exc.current,
-                "requested_status": exc.next_status,
-                "allowed_transitions": list(exc.allowed),
-            },
-        )
-    if not payment:
-        raise HTTPException(status_code=409, detail="Max retries reached")
-    audit_log.log(
-        "payment_retried",
-        {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
-    )
-    return payment
-
-
-# ---------------------------------------------------------------------------
-# Retry queue with backoff visibility (#240)
-# ---------------------------------------------------------------------------
-
-# Exponential backoff: base 30s, doubles each attempt, capped at 1 hour.
-_RETRY_BASE_SECONDS = 30
-_RETRY_MAX_SECONDS = 3600
-
-
-def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
-    """Return the datetime when the next retry should occur, or None if at max."""
-    if retry_count >= PaymentRepository.MAX_RETRIES:
-        return None
-    delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
-    anchor = last_retried_at or datetime.now(UTC)
-    return anchor + timedelta(seconds=delay)
-
-
 class PaymentRetryQueueItem(BaseModel):
     """A payment in the retry queue with backoff metadata."""
 
@@ -393,6 +299,100 @@ def retry_now(
         },
     )
     return payment
+
+
+@router.get("/{transaction_id}", response_model=PaymentTransaction)
+def get_payment(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+    repo = PaymentRepository(db)
+    payment = repo.get(transaction_id)
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return payment
+
+
+class ReconcileRequest(BaseModel):
+    status: str
+
+
+@router.post("/{transaction_id}/reconcile", response_model=PaymentTransaction)
+def reconcile_payment(
+    transaction_id: str, payload: ReconcileRequest, current_user=Depends(require_admin), db: Session = Depends(get_db)
+):
+    repo = PaymentRepository(db)
+    existing = repo.get(transaction_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    try:
+        payment = repo.reconcile(transaction_id, payload.status)
+    except PaymentTransitionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "current_status": exc.current,
+                "requested_status": exc.next_status,
+                "allowed_transitions": list(exc.allowed),
+            },
+        )
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    # BE-027: Include previous status in audit log for reconciliation history
+    audit_log.log(
+        "payment_reconciled",
+        {
+            "id": transaction_id,
+            "previous_status": existing.status,
+            "status": payload.status,
+        },
+    )
+    return payment
+
+
+@router.post("/{transaction_id}/retry", response_model=PaymentTransaction)
+def retry_payment(transaction_id: str, current_user=Depends(require_engineer), db: Session = Depends(get_db)):
+    repo = PaymentRepository(db)
+    existing = repo.get(transaction_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    try:
+        payment = repo.retry(transaction_id)
+    except PaymentTransitionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "current_status": exc.current,
+                "requested_status": exc.next_status,
+                "allowed_transitions": list(exc.allowed),
+            },
+        )
+    if not payment:
+        raise HTTPException(status_code=409, detail="Max retries reached")
+    audit_log.log(
+        "payment_retried",
+        {"id": transaction_id, "retry_count": payment.retry_count, "override": False},
+    )
+    return payment
+
+
+# ---------------------------------------------------------------------------
+# Retry queue with backoff visibility (#240)
+# ---------------------------------------------------------------------------
+
+# Exponential backoff: base 30s, doubles each attempt, capped at 1 hour.
+_RETRY_BASE_SECONDS = 30
+_RETRY_MAX_SECONDS = 3600
+
+
+def _compute_next_retry_at(retry_count: int, last_retried_at: datetime | None) -> datetime | None:
+    """Return the datetime when the next retry should occur, or None if at max."""
+    if retry_count >= PaymentRepository.MAX_RETRIES:
+        return None
+    delay = min(_RETRY_BASE_SECONDS * (2**retry_count), _RETRY_MAX_SECONDS)
+    anchor = last_retried_at or datetime.now(UTC)
+    return anchor + timedelta(seconds=delay)
 
 
 class ProviderCallbackRequest(BaseModel):

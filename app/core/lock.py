@@ -24,10 +24,15 @@ logger = logging.getLogger(__name__)
 
 
 class ConcurrencyLockError(ApexTransientError):
-    """Raised when a lock cannot be acquired."""
+    """Raised when a lock cannot be acquired (409, not the transient 503)."""
 
     def __init__(self, detail: str = "Could not acquire lock.") -> None:
-        super().__init__(detail=detail, error_code="concurrency_lock", status_code=409)
+        # ApexTransientError hard-codes its own error_code/status_code, so the
+        # specialised values must be set after the super() call — passing them
+        # as kwargs raises TypeError (duplicate keyword).
+        super().__init__(detail=detail)
+        self.error_code = "concurrency_lock"
+        self.status_code = 409
 
 
 def _lock_id_from_key(key: str) -> int:
@@ -72,9 +77,7 @@ def advisory_lock(db: Session, lock_key: str, timeout_seconds: float = 5.0) -> G
     deadline = time.monotonic() + timeout_seconds
 
     while True:
-        result = db.execute(
-            text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
-        )
+        result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
         if result.scalar():
             break
 
@@ -140,9 +143,7 @@ def advisory_lock_nowait(db: Session, lock_key: str) -> Generator[None, None, No
     """
     lock_id = _lock_id_from_key(lock_key)
 
-    result = db.execute(
-        text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id}
-    )
+    result = db.execute(text("SELECT pg_try_advisory_xact_lock(CAST(:lock_id AS bigint))"), {"lock_id": lock_id})
     acquired = result.scalar()
 
     if not acquired:
