@@ -20,6 +20,7 @@ from app.tasks.sla_tasks import compute_sla_for_device, enqueue_bulk_sla_computa
 from app.utils.cache import TTLCache
 from app.utils.correlation_ctx import get_correlation_id
 from app.utils.cursor import CursorPage, decode_cursor, encode_cursor
+from app.utils.job_states import celery_state_to_job_status
 from app.utils.logging import get_structured_logger
 
 logger = get_structured_logger("jobs_api")
@@ -166,17 +167,9 @@ def _sync_job_status_from_celery(db: Session, job: Job) -> Job:
         return job
 
     task_result: AsyncResult = AsyncResult(job.celery_task_id, app=celery_app)
-    celery_state = task_result.state  # PENDING, STARTED, SUCCESS, FAILURE, REVOKED
-
-    state_map = {
-        "PENDING": JobStatus.PENDING,
-        "STARTED": JobStatus.STARTED,
-        "SUCCESS": JobStatus.SUCCESS,
-        "FAILURE": JobStatus.FAILURE,
-        "REVOKED": JobStatus.REVOKED,
-    }
-
-    new_status = state_map.get(celery_state, job.status)
+    # #571: one closed, unit-tested mapping for every Celery state; unmapped
+    # states keep the stored status instead of passing unknown strings through.
+    new_status = celery_state_to_job_status(task_result.state, fallback=job.status)
     _job_status_cache.set(cache_key, new_status)
     if new_status != job.status:
         job.status = new_status

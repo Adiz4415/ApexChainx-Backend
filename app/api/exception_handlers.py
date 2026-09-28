@@ -50,6 +50,7 @@ def _problem_response(
     title: str,
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
+    error_code: str | None = None,
 ) -> JSONResponse:
     correlation_id = get_or_generate_correlation_id()
     problem = ProblemDetail(
@@ -60,23 +61,28 @@ def _problem_response(
         correlation_id=correlation_id,
         errors=errors,
     )
+    body = problem.model_dump(exclude_none=True)
+    # #569: registered machine-readable codes ride along as an RFC 7807
+    # extension member (see docs/ERROR_CODES.md) when the raiser provides one.
+    if error_code:
+        body["error_code"] = error_code
     return JSONResponse(
         status_code=status,
-        content=problem.model_dump(exclude_none=True),
+        content=body,
         media_type="application/problem+json",
         headers={"X-Correlation-ID": correlation_id},
     )
 
 
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
     if isinstance(exc.detail, str):
         return _problem_response(
             status=exc.status_code,
             title=_default_title(exc.status_code),
             detail=exc.detail,
+            # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
+            error_code=getattr(exc, "error_code", None),
         )
 
     errors: list[dict[str, Any]]
@@ -94,7 +100,6 @@ async def http_exception_handler(
         detail="Request failed.",
         errors=errors,
     )
-
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
