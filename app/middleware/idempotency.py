@@ -14,6 +14,13 @@ Fix #497: A body that is not valid JSON no longer raises JSONDecodeError
           out of the middleware. The fingerprint step rejects it with a
           clean 400 *before* any cache read/write, so the key is left
           untouched and a corrected retry under the same key still works.
+Fix #576: Completed keys already expired via TTL (#16), but nothing capped
+          the *number* of completed keys tracked inside a single TTL
+          window, so a burst of unique keys could still grow the keystore
+          without bound before the TTL had a chance to clean anything up.
+          A sorted-set index now records when each completed key was
+          written; once the index grows past IDEMPOTENCY_MAX_COMPLETED_KEYS,
+          the oldest completed keys are evicted immediately.
 """
 
 import hashlib
@@ -33,6 +40,11 @@ logger = logging.getLogger(__name__)
 
 # How long (seconds) to disable Redis after a failure (#314 circuit breaker)
 _CIRCUIT_OPEN_TTL = 30
+
+# Sorted-set index of completed cache keys, scored by write time (#576).
+# Lets us find and evict the oldest completed keys once the cap is exceeded,
+# without ever having to SCAN the keyspace in the request path.
+_COMPLETED_INDEX_KEY = "idempotency:completed-index"
 
 
 class MalformedRequestBody(ValueError):
@@ -79,10 +91,19 @@ def _actor_key(request: Request) -> str:
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, redis_client: Redis | None = None):
+    def __init__(
+        self,
+        app,
+        redis_client: Redis | None = None,
+        max_completed_keys: int | None = None,
+    ):
         super().__init__(app)
         self.redis = redis_client or Redis.from_url(settings.CELERY_BROKER_URL)
         self.ttl = settings.IDEMPOTENCY_KEY_TTL_HOURS * 3600
+        # Fix #576: hard cap on the number of completed keys tracked at once.
+        self.max_completed_keys = (
+            max_completed_keys if max_completed_keys is not None else settings.IDEMPOTENCY_MAX_COMPLETED_KEYS
+        )
         # Circuit-breaker state (#314): timestamp until which Redis is skipped
         self._disabled_until: float = 0.0
 
@@ -119,6 +140,41 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             self.redis.setex(key, ttl, value)
         except RedisError as exc:
             logger.warning("Idempotency middleware: Redis SETEX failed: %s", exc)
+            self._trip_circuit()
+
+    def _track_completed_key(self, cache_key: str, written_at: float) -> None:
+        """Record a completed key in the index (#576). Silently fails on
+        Redis error, same as the other helpers -- bookkeeping for the cap
+        must never be able to break the request path.
+        """
+        if self._circuit_open():
+            return
+        try:
+            self.redis.zadd(_COMPLETED_INDEX_KEY, {cache_key: written_at})
+        except RedisError as exc:
+            logger.warning("Idempotency middleware: Redis ZADD failed: %s", exc)
+            self._trip_circuit()
+
+    def _enforce_completed_key_cap(self) -> None:
+        """Evict the oldest completed keys once the index exceeds the
+        configured cap (#576). The TTL on each key already bounds growth
+        over time; this bounds growth *within* a single TTL window too, so
+        a burst of unique keys can't blow past it before anything expires.
+        """
+        if self._circuit_open():
+            return
+        try:
+            overflow = self.redis.zcard(_COMPLETED_INDEX_KEY) - self.max_completed_keys
+            if overflow <= 0:
+                return
+            oldest = self.redis.zrange(_COMPLETED_INDEX_KEY, 0, overflow - 1)
+            if not oldest:
+                return
+            for member in oldest:
+                self.redis.delete(member)
+            self.redis.zrem(_COMPLETED_INDEX_KEY, *oldest)
+        except RedisError as exc:
+            logger.warning("Idempotency middleware: Redis cap enforcement failed: %s", exc)
             self._trip_circuit()
 
     # ------------------------------------------------------------------
@@ -184,6 +240,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 "media_type": response.media_type or "application/json",
             }
             self._redis_setex(cache_key, self.ttl, json.dumps(cached_response))
+            # Fix #576: index the key so we can enforce a hard cap on the
+            # total number of completed keys, independent of the TTL.
+            self._track_completed_key(cache_key, time.time())
+            self._enforce_completed_key_cap()
 
         return Response(
             status_code=response.status_code,

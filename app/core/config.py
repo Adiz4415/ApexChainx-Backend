@@ -12,6 +12,34 @@ MIN_SECRET_KEY_LENGTH = 32
 # while presenting a queue topology that does nothing.
 DEV_ENVIRONMENTS = {"local", "test"}
 
+# Header clients use to pin an API version (#499)
+API_VERSION_HEADER = "X-API-Version"
+
+
+def parse_api_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a dotted API version into a 3-part comparable tuple.
+
+    Accepts ``1``, ``1.0``, ``1.0.0`` and an optional ``v`` prefix.  Missing
+    components are zero-padded so ``1`` and ``1.0.0`` compare equal.  Returns
+    ``None`` when the value is not a dotted numeric version.
+    """
+    raw = value.strip().removeprefix("v").strip()
+    if not raw:
+        return None
+    parts = raw.split(".")
+    if len(parts) > 3:
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        # isdecimal (not isdigit) so superscripts such as "\u00b2" are rejected
+        # instead of blowing up int() on an attacker-controlled header.
+        if not part.isdecimal():
+            return None
+        numbers.append(int(part))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ApexChainx API"
@@ -152,6 +180,12 @@ class Settings(BaseSettings):
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
+    # Fix #576: hard cap on how many completed Idempotency-Key records are
+    # tracked at once. The TTL above already bounds growth over time, but a
+    # burst of unique keys inside a single TTL window could still grow the
+    # keystore without bound before anything expires. Once this many
+    # completed keys exist, the oldest ones are evicted immediately.
+    IDEMPOTENCY_MAX_COMPLETED_KEYS: int = 50_000
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
