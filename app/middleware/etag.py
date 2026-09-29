@@ -66,18 +66,21 @@ class ETagMiddleware:
         body_prefix = bytearray()
         etag: str | None = None
         not_modified = False
-        start_forwarded = False  # True when http.response.start was already sent
+        # Only 2xx responses are buffered for the ETag computation. Non-2xx
+        # responses are forwarded untouched: their start message was already
+        # sent, and re-sending it from the body path produced a double
+        # "http.response.start" (invalid ASGI) for every GET 404/4xx.
+        buffer_response = False
 
         async def send_with_etag(message: Message) -> None:
-            nonlocal response_status, response_headers
-            nonlocal etag, not_modified, start_forwarded
+            nonlocal response_status, response_headers, buffer_response
+            nonlocal etag, not_modified
 
             if message["type"] == "http.response.start":
                 response_status = message["status"]
                 response_headers = list(message.get("headers", []))
-                if response_status < 200 or response_status >= 300:
-                    # Non-2xx: pass through immediately; body must also pass through.
-                    start_forwarded = True
+                buffer_response = 200 <= response_status < 300
+                if not buffer_response:
                     await send(message)
                     return
                 if any(name.lower() == b"etag" for name, _ in response_headers):
@@ -88,7 +91,7 @@ class ETagMiddleware:
                 # 2xx without ETag: hold back the start until we have the body.
                 return
 
-            if message["type"] != "http.response.body" or response_status is None:
+            if message["type"] != "http.response.body" or not buffer_response:
                 await send(message)
                 return
 

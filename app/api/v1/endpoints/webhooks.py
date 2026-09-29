@@ -3,12 +3,19 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints.webhook_errors import (
+    DELIVERY_NOT_FOUND,
+    VALIDATION_ERROR,
+    WEBHOOK_CONFLICT,
+    WEBHOOK_NOT_FOUND,
+    WebhookHTTPException,
+)
 from app.core.config import settings
 from app.core.security import hash_token, require_admin
 from app.db.session import get_db
@@ -226,7 +233,11 @@ class WebhookReplayResponse(BaseModel):
 def _get_webhook_or_404(db: Session, webhook_id: UUID) -> Webhook:
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not webhook:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook not found.")
+        raise WebhookHTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook not found.",
+            error_code=WEBHOOK_NOT_FOUND,
+        )
     return webhook
 
 
@@ -239,9 +250,10 @@ def _get_live_webhook_or_409(db: Session, webhook_id: UUID) -> Webhook:
     """
     webhook = _get_webhook_or_404(db, webhook_id)
     if webhook.is_deleted:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Webhook has been deleted and can no longer be modified.",
+            error_code=WEBHOOK_CONFLICT,
         )
     return webhook
 
@@ -332,12 +344,13 @@ def _enforce_webhook_registration_cap(db: Session) -> None:
         return
     registered = _count_registered_webhooks(db)
     if registered >= cap:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Webhook limit reached: {registered} webhooks are already registered and "
                 f"MAX_WEBHOOKS_PER_ACCOUNT is {cap}. Delete an unused webhook before creating another."
             ),
+            error_code=WEBHOOK_CONFLICT,
         )
 
 
@@ -679,11 +692,16 @@ def retry_delivery(
         .first()
     )
     if not delivery:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+        raise WebhookHTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery not found.",
+            error_code=DELIVERY_NOT_FOUND,
+        )
     if delivery.status == WebhookDeliveryStatus.SUCCESS:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Delivery already succeeded; retry not needed.",
+            error_code=VALIDATION_ERROR,
         )
     if delivery.status == WebhookDeliveryStatus.SENDING:
         raise HTTPException(
@@ -741,15 +759,20 @@ def replay_dead_letter_delivery(
         .first()
     )
     if not delivery:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+        raise WebhookHTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery not found.",
+            error_code=DELIVERY_NOT_FOUND,
+        )
 
     from app.services.webhook_service import replay_dead_letter_delivery
 
     success = replay_dead_letter_delivery(db, delivery_id)
     if not success:
-        raise HTTPException(
+        raise WebhookHTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to replay delivery. It may not be in dead-letter status.",
+            error_code=VALIDATION_ERROR,
         )
 
     db.refresh(delivery)

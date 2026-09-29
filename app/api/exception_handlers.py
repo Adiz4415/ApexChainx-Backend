@@ -78,9 +78,7 @@ def _problem_response(
     title: str,
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
-    *,
-    request: Request | None = None,
-    headers: dict[str, str] | None = None,
+    error_code: str | None = None,
 ) -> JSONResponse:
     """Build an RFC 7807 JSON response, echoing the request's correlation ID.
 
@@ -103,39 +101,28 @@ def _problem_response(
         correlation_id=correlation_id,
         errors=errors,
     )
-    if status >= 400:
-        logger.warning(
-            "Error response",
-            extra={
-                "correlation_id": correlation_id,
-                "status": status,
-                "title": title,
-                "detail": detail,
-                "path": str(request.url.path) if request is not None else None,
-            },
-        )
-    response_headers = {"X-Correlation-ID": correlation_id}
-    if headers:
-        response_headers.update(headers)
+    body = problem.model_dump(exclude_none=True)
+    # #569: registered machine-readable codes ride along as an RFC 7807
+    # extension member (see docs/ERROR_CODES.md) when the raiser provides one.
+    if error_code:
+        body["error_code"] = error_code
     return JSONResponse(
         status_code=status,
-        content=problem.model_dump(exclude_none=True),
+        content=body,
         media_type="application/problem+json",
         headers=response_headers,
     )
 
 
-async def http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Handle all HTTPException instances as RFC 7807 problem responses."""
     if isinstance(exc.detail, str):
         return _problem_response(
             status=exc.status_code,
             title=_default_title(exc.status_code),
             detail=exc.detail,
-            request=request,
-            headers=exc.headers,
+            # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
+            error_code=getattr(exc, "error_code", None),
         )
 
     errors: list[dict[str, Any]]
@@ -155,7 +142,6 @@ async def http_exception_handler(
         request=request,
         headers=exc.headers,
     )
-
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
