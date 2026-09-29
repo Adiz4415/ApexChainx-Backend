@@ -193,6 +193,10 @@ class Settings(BaseSettings):
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
+    # Upper bound for a webhook's per-row secret_grace_hours (#582): the column
+    # is admin-settable, so it needs a ceiling or an operator typo (or an
+    # admin session gone rogue) could pin an outgoing secret forever.
+    MAX_WEBHOOK_SECRET_GRACE_HOURS: int = 24 * 7
     # Fernet key (32 url-safe base64-encoded bytes) used to encrypt webhook
     # signing secrets at rest (#266). Required in non-local environments; when
     # unset (local/test) a key is derived from SECRET_KEY so secrets are still

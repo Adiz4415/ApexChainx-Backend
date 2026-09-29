@@ -1,3 +1,4 @@
+# raw-sql-allowed
 """Convert sla_results.amount and payment_transactions.amount from float to bigint.
 
 Revision ID: 0026c_sla_payment_amounts_bigint
