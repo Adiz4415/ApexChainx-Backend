@@ -84,11 +84,20 @@ class ETagMiddleware:
                     await send(message)
                     return
                 if any(name.lower() == b"etag" for name, _ in response_headers):
+                    # Response already has an ETag; pass through as-is.
+                    start_forwarded = True
                     await send(message)
                     return
+                # 2xx without ETag: hold back the start until we have the body.
                 return
 
             if message["type"] != "http.response.body" or not buffer_response:
+                await send(message)
+                return
+
+            # For pass-through paths (non-2xx, or response already had ETag) just
+            # forward the body directly without computing an ETag.
+            if start_forwarded:
                 await send(message)
                 return
 

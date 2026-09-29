@@ -24,6 +24,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
         self.setex_calls: list[str] = []
+        self.zsets: dict[str, dict[str, float]] = {}
 
     def get(self, key: str):
         return self.store.get(key)
@@ -31,6 +32,29 @@ class FakeRedis:
     def setex(self, key: str, ttl: int, value: str) -> None:
         self.setex_calls.append(key)
         self.store[key] = value
+
+    # #576: the middleware now also indexes completed keys in a sorted set
+    # to enforce a cap on how many it tracks at once. This double doesn't
+    # need to exercise that behaviour (see test_idempotency_key_retention.py
+    # for that), it just needs to not blow up when the middleware calls it.
+    def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+
+    def zadd(self, name: str, mapping: dict) -> None:
+        self.zsets.setdefault(name, {}).update(mapping)
+
+    def zcard(self, name: str) -> int:
+        return len(self.zsets.get(name, {}))
+
+    def zrange(self, name: str, start: int, end: int) -> list[str]:
+        members = sorted(self.zsets.get(name, {}).items(), key=lambda kv: kv[1])
+        keys = [member for member, _ in members]
+        return keys[start:] if end == -1 else keys[start : end + 1]
+
+    def zrem(self, name: str, *members: str) -> None:
+        z = self.zsets.get(name, {})
+        for member in members:
+            z.pop(member, None)
 
 
 def _client(redis: FakeRedis) -> TestClient:

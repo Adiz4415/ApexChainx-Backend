@@ -184,6 +184,12 @@ class Settings(BaseSettings):
 
     # Idempotency key TTL (#16)
     IDEMPOTENCY_KEY_TTL_HOURS: int = 24
+    # Fix #576: hard cap on how many completed Idempotency-Key records are
+    # tracked at once. The TTL above already bounds growth over time, but a
+    # burst of unique keys inside a single TTL window could still grow the
+    # keystore without bound before anything expires. Once this many
+    # completed keys exist, the oldest ones are evicted immediately.
+    IDEMPOTENCY_MAX_COMPLETED_KEYS: int = 50_000
     # Webhook secret rotation grace period (#9)
     # Number of hours the previous secret remains valid after rotation.
     WEBHOOK_SECRET_GRACE_HOURS: int = 24
