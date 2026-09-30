@@ -18,6 +18,9 @@ class SLAAnalyticsSnapshotORM(Base):
     total_penalties = Column(Float, nullable=False, default=0.0)
     net_payout = Column(Float, nullable=False, default=0.0)
     avg_mttr = Column(Float, nullable=False, default=0.0)
+    # Composite of every severity's policy version at snapshot time (#567),
+    # e.g. "critical1.high1.low2.medium1". NULL for rows written before #567.
+    policy_version = Column(String(255), nullable=True)
     checksum = Column(String(64), nullable=False)  # SHA-256 hash of the snapshot data
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now(UTC))
 
@@ -31,6 +34,7 @@ class SLAAnalyticsSnapshotORM(Base):
             "total_penalties": self.total_penalties,
             "net_payout": self.net_payout,
             "avg_mttr": self.avg_mttr,
+            "policy_version": self.policy_version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
         # Use sorted keys to ensure consistent hashing

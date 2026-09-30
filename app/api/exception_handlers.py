@@ -79,6 +79,8 @@ def _problem_response(
     detail: str = "",
     errors: list[dict[str, Any]] | None = None,
     error_code: str | None = None,
+    request: Request | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build an RFC 7807 JSON response, echoing the request's correlation ID.
 
@@ -106,6 +108,11 @@ def _problem_response(
     # extension member (see docs/ERROR_CODES.md) when the raiser provides one.
     if error_code:
         body["error_code"] = error_code
+    response_headers = {"X-Correlation-ID": correlation_id}
+    if headers:
+        for name, value in headers.items():
+            if name.lower() != "x-correlation-id":
+                response_headers[name] = value
     return JSONResponse(
         status_code=status,
         content=body,
@@ -123,6 +130,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
             detail=exc.detail,
             # #569: endpoints may attach a registered code (docs/ERROR_CODES.md)
             error_code=getattr(exc, "error_code", None),
+            request=request,
+            headers=exc.headers,
         )
 
     errors: list[dict[str, Any]]

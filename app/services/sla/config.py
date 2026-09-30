@@ -115,6 +115,23 @@ def get_current_token(severity: str, db: Session | None = None) -> str:
     return _publish_tokens[normalized]
 
 
+def get_all_policy_versions(db: Session | None = None) -> dict[str, int]:
+    """Return the current policy version for every severity (#567).
+
+    DB-backed when a session is available (authoritative across workers);
+    falls back to the in-process cache on the hot path.
+    """
+    if db is not None:
+        versions = {
+            severity: get_policy_version(severity, db=db)
+            for severity in SLA_CONFIG
+        }
+        # All severities resolved from the ledger — return directly.
+        if all(v > 0 for v in versions.values()):
+            return versions
+    return dict(_policy_versions)
+
+
 def get_all_config() -> dict[str, SLASeverityConfig]:
     return {severity: SLASeverityConfig(**deepcopy(values)) for severity, values in SLA_CONFIG.items()}
 

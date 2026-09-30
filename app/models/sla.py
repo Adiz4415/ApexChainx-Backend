@@ -142,5 +142,7 @@ class SLAAnalyticsSnapshot(BaseModel):
     total_penalties: float = Field(ge=0.0)
     net_payout: float
     avg_mttr: float = Field(ge=0.0)
+    # Composite of every severity's policy version at snapshot time (#567).
+    policy_version: str | None = None
     checksum: str
     created_at: str | None = None

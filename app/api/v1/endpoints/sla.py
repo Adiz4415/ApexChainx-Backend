@@ -20,12 +20,14 @@ from app.services.sla.config import (
     ConcurrencyError,
     get_all_config,
     get_all_config_with_hashes,
+    get_all_policy_versions,
     get_config_for_severity,
     get_config_with_hash,
     get_current_token,
     publish_config_for_severity,
     update_config_for_severity,
 )
+from app.services.sla_cache_key import build_analytics_cache_key
 from app.utils.analytics_exporter import (
     export_analytics_summary,
     export_dashboard_kpi,
@@ -176,7 +178,9 @@ def get_sla_dashboard_kpis(
     db: Session = Depends(get_db),
 ):
     resolved_site = site_id or site
-    cache_key = f"dashboard_kpis_{severity}_{resolved_site}"
+    cache_key = build_analytics_cache_key(
+        "dashboard_kpis", get_all_policy_versions(db), severity, resolved_site
+    )
     cached = _dashboard_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -203,7 +207,9 @@ def get_sla_trends(
         )
 
     resolved_site = site_id or site
-    cache_key = f"trends_{days}_{bucket}_{tz}_{severity}_{resolved_site}"
+    cache_key = build_analytics_cache_key(
+        "trends", get_all_policy_versions(db), days, bucket, tz, severity, resolved_site
+    )
     cached = _dashboard_cache.get(cache_key)
     if cached is not None:
         return cached

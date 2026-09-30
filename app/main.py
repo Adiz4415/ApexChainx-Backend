@@ -1,6 +1,8 @@
 import asyncio
 from datetime import UTC, datetime
 
+from sqlalchemy import text
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -37,6 +39,9 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.payload_size import PayloadSizeMiddleware
 from app.services.health_report import build_readiness_report
 from app.utils.correlation_ctx import get_or_generate_correlation_id
+from app.utils.logging import get_structured_logger
+
+logger = get_structured_logger("health")
 
 configure_logging()
 validate_critical_settings(settings)
@@ -196,6 +201,37 @@ async def apex_transient_error_handler(request: Request, exc: ApexTransientError
 # Health checks
 @app.get("/health/liveness")
 def liveness():
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+
+
+def _ping_database(db_engine) -> None:
+    """Trivial connectivity check; raises on failure. Cheap by design (#565)."""
+    with db_engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
+# Issue #565: dedicated cheap liveness probe. Touches no dependency at all —
+# not the database, not Redis, no report aggregation — so probe pressure can
+# never contribute to DB load. /health/readyz below is the cheap readiness
+# counterpart (single DB ping); /health/readiness keeps the full report.
+@app.get("/health/livez")
+def livez():
+    return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+
+
+@app.get("/health/readyz")
+async def readyz():
+    """Cheap readiness probe: a single trivial DB ping, nothing else (#565).
+
+    Deliberately avoids build_readiness_report's pool inspection, DLQ
+    counting, audit-DB and Redis probes — those belong to the full
+    /health/readiness report, not to a probe that fires every few seconds.
+    """
+    try:
+        await asyncio.to_thread(_ping_database, engine)
+    except Exception:
+        logger.exception("Readiness probe: database ping failed")
+        return JSONResponse(status_code=503, content={"status": "down", "database": "unreachable"})
     return {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
 
 

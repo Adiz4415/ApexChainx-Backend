@@ -134,7 +134,7 @@ def instrument_app(app) -> None:
     # FastAPI instrumentation with request/response capture
     FastAPIInstrumentor.instrument_app(
         app,
-        excluded_urls="/health,/health/liveness,/health/readiness,/metrics",
+        excluded_urls="/health,/health/liveness,/health/livez,/health/readyz,/health/readiness,/metrics",
         server_request_hook=_server_request_hook,
         client_response_hook=_client_response_hook,
     )
